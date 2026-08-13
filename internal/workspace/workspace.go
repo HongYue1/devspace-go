@@ -314,31 +314,41 @@ func (r *Registry) ResolveWorkingDirectory(ws *Workspace, workingDir string) (st
 }
 
 // loadInitialAgentsFiles loads AGENTS.md/CLAUDE.md files from the root and agent dir.
+//
+// Each spelling is tried in turn, but a filesystem that ignores case answers
+// to all of them, so every resolved path is loaded at most once. Without that
+// guard one file on disk was read up to four times and reported as several
+// separate instruction files.
 func (r *Registry) loadInitialAgentsFiles(root string) []AgentsFile {
 	agentDir := filepath.Clean(r.cfg.AgentDir)
 	contextNames := []string{"AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"}
 
 	var files []AgentsFile
+	seen := make(map[string]bool)
+
+	load := func(dir, name string) {
+		path := filepath.Join(dir, name)
+		key := pathKey(path)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return
+		}
+		files = append(files, AgentsFile{
+			Path:    path,
+			Content: string(data),
+		})
+	}
 
 	for _, name := range contextNames {
-		// Check workspace root
-		path := filepath.Join(root, name)
-		if data, err := os.ReadFile(path); err == nil {
-			files = append(files, AgentsFile{
-				Path:    path,
-				Content: string(data),
-			})
-		}
+		load(root, name)
 
-		// Check agent directory
 		if agentDir != "" && agentDir != root {
-			path := filepath.Join(agentDir, name)
-			if data, err := os.ReadFile(path); err == nil {
-				files = append(files, AgentsFile{
-					Path:    path,
-					Content: string(data),
-				})
-			}
+			load(agentDir, name)
 		}
 	}
 
@@ -347,29 +357,41 @@ func (r *Registry) loadInitialAgentsFiles(root string) []AgentsFile {
 
 // findAvailableAgentsFiles discovers all AGENTS.md/CLAUDE.md files in the workspace.
 func (r *Registry) findAvailableAgentsFiles(root string, loaded []AgentsFile) []AgentsFileEntry {
-	loadedPaths := make(map[string]bool)
+	seen := make(map[string]bool)
 	for _, f := range loaded {
-		loadedPaths[filepath.Clean(f.Path)] = true
-	}
-
-	contextNames := map[string]bool{
-		"AGENTS.md": true,
-		"CLAUDE.md": true,
+		seen[pathKey(f.Path)] = true
 	}
 
 	var discovered []AgentsFileEntry
 	WalkWorkspace(root, func(path string, info os.FileInfo) error {
-		name := strings.ToUpper(info.Name())
-		if contextNames[info.Name()] || contextNames[name] {
-			cleanPath := filepath.Clean(path)
-			if !loadedPaths[cleanPath] {
-				discovered = append(discovered, AgentsFileEntry{Path: path})
-			}
+		if !isAgentsFileName(info.Name()) {
+			return nil
 		}
+
+		key := pathKey(path)
+		if seen[key] {
+			return nil
+		}
+		seen[key] = true
+
+		discovered = append(discovered, AgentsFileEntry{Path: path})
 		return nil
 	})
 
 	return discovered
+}
+
+// isAgentsFileName reports whether a file is an instruction file. The compare
+// ignores case so that AGENTS.MD and agents.md are recognised too; the old
+// table compared an uppercased name against lowercase keys, so it matched
+// neither.
+func isAgentsFileName(name string) bool {
+	for _, contextName := range []string{"AGENTS.md", "CLAUDE.md"} {
+		if strings.EqualFold(name, contextName) {
+			return true
+		}
+	}
+	return false
 }
 
 // FormatPath formats a path relative to the workspace root.

@@ -77,6 +77,17 @@ func AssertAllowedPath(absPath string, allowedRoots []string) (string, error) {
 	return "", fmt.Errorf("path %s is outside allowed roots", absPath)
 }
 
+// pathKey returns a comparison key for a path. On a filesystem that ignores
+// case, two spellings of one file must collapse to the same key, otherwise
+// the same file is treated as two.
+func pathKey(path string) string {
+	clean := filepath.Clean(path)
+	if caseInsensitiveFS {
+		return strings.ToLower(clean)
+	}
+	return clean
+}
+
 // WalkWorkspace walks a directory tree, skipping blacklisted directories.
 func WalkWorkspace(root string, visitor func(path string, info os.FileInfo) error) error {
 	skipDirs := map[string]bool{
