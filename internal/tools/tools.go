@@ -280,11 +280,12 @@ type EditInput struct {
 	WorkspaceID string      `json:"workspaceId" jsonschema:"Workspace identifier returned by open_workspace."`
 	Path        string      `json:"path" jsonschema:"File path to edit, relative to the workspace root."`
 	Edits       []EditBlock `json:"edits" jsonschema:"Array of edit operations."`
+	DryRun      bool        `json:"dryRun,omitempty" jsonschema:"Report where each edit would land without writing the file."`
 }
 
 // EditBlock represents a single find-and-replace operation.
 type EditBlock struct {
-	OldText string `json:"oldText" jsonschema:"Exact text to replace. Must match uniquely."`
+	OldText string `json:"oldText" jsonschema:"Text to replace. Must match uniquely. Line endings and trailing whitespace are ignored if the exact text is not found."`
 	NewText string `json:"newText" jsonschema:"Replacement text."`
 }
 
@@ -310,42 +311,72 @@ func EditFile(ctx context.Context, req *mcp.CallToolRequest, input EditInput, ws
 		return result, EditOutput{}, nil
 	}
 
-	content := string(data)
-
-	for i, edit := range input.Edits {
-		count := strings.Count(content, edit.OldText)
-		if count == 0 {
-			result := &mcp.CallToolResult{}
-			result.SetError(fmt.Errorf("edit %d: oldText not found in file", i+1))
-			return result, EditOutput{}, nil
-		}
-		if count > 1 {
-			result := &mcp.CallToolResult{}
-			result.SetError(fmt.Errorf("edit %d: oldText matches %d times, must be unique", i+1, count))
-			return result, EditOutput{}, nil
-		}
-
-		content = strings.Replace(content, edit.OldText, edit.NewText, 1)
+	if len(input.Edits) == 0 {
+		result := &mcp.CallToolResult{}
+		result.SetError(fmt.Errorf("edits must not be empty"))
+		return result, EditOutput{}, nil
 	}
 
-	if content == string(data) {
+	original := string(data)
+
+	// A file that mixes CRLF and LF is matched byte for byte, so that lines the
+	// caller did not touch keep the ending they already had.
+	mixed := hasMixedLineEndings(original)
+	ending := detectLineEnding(original)
+
+	content := original
+	if !mixed {
+		content = normalizeNewlines(original)
+	}
+	before := content
+
+	notes := make([]string, 0, len(input.Edits))
+	for i, edit := range input.Edits {
+		updated, note, editErr := applyEdit(content, edit, i+1, input.Path, original, !mixed)
+		if editErr != nil {
+			result := &mcp.CallToolResult{}
+			result.SetError(editErr)
+			return result, EditOutput{}, nil
+		}
+		content = updated
+		notes = append(notes, note)
+	}
+
+	if content == before {
 		result := &mcp.CallToolResult{}
 		result.SetError(fmt.Errorf("no changes made to file"))
 		return result, EditOutput{}, nil
 	}
 
-	if err := os.WriteFile(absPath, []byte(content), 0644); err != nil {
+	output := content
+	if !mixed {
+		output = restoreLineEndings(content, ending)
+	}
+	detail := strings.Join(notes, "\n")
+
+	if input.DryRun {
+		message := fmt.Sprintf("Dry run for %s: %d edit(s) would apply, %d bytes.\n%s",
+			input.Path, len(input.Edits), len(output), detail)
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{
+				&mcp.TextContent{Text: message},
+			},
+		}, EditOutput{Status: "dry_run", Result: message}, nil
+	}
+
+	if err := os.WriteFile(absPath, []byte(output), 0644); err != nil {
 		result := &mcp.CallToolResult{}
 		result.SetError(fmt.Errorf("failed to write file: %v", err))
 		return result, EditOutput{}, nil
 	}
 
-	result := fmt.Sprintf("Edited %s: %d edit(s) applied.", input.Path, len(input.Edits))
+	message := fmt.Sprintf("Edited %s: %d edit(s) applied, %d bytes.\n%s",
+		input.Path, len(input.Edits), len(output), detail)
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
-			&mcp.TextContent{Text: result},
+			&mcp.TextContent{Text: message},
 		},
-	}, EditOutput{Status: "applied", Result: result}, nil
+	}, EditOutput{Status: "applied", Result: message}, nil
 }
 
 // GrepInput represents the input for the grep tool.
