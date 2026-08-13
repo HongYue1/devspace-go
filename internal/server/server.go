@@ -520,7 +520,8 @@ func (s *Server) registerTools(server *mcp.Server) {
 				return result, tools.ReadOutput{}, nil
 			}
 
-			return tools.ReadFile(ctx, req, input, ws.Root)
+			res, out, err := tools.ReadFile(ctx, req, input, ws.Root)
+			return prefixNotice(res, ws), out, err
 		},
 	)
 
@@ -551,7 +552,8 @@ func (s *Server) registerTools(server *mcp.Server) {
 				return result, tools.WriteOutput{}, nil
 			}
 
-			return tools.WriteFile(ctx, req, input, ws.Root)
+			res, out, err := tools.WriteFile(ctx, req, input, ws.Root)
+			return prefixNotice(res, ws), out, err
 		},
 	)
 
@@ -582,7 +584,8 @@ func (s *Server) registerTools(server *mcp.Server) {
 				return result, tools.MkdirOutput{}, nil
 			}
 
-			return tools.MakeDirectory(ctx, req, input, ws.Root)
+			res, out, err := tools.MakeDirectory(ctx, req, input, ws.Root)
+			return prefixNotice(res, ws), out, err
 		},
 	)
 
@@ -619,7 +622,8 @@ func (s *Server) registerTools(server *mcp.Server) {
 				return result, tools.MoveOutput{}, nil
 			}
 
-			return tools.MovePath(ctx, req, input, ws.Root)
+			res, out, err := tools.MovePath(ctx, req, input, ws.Root)
+			return prefixNotice(res, ws), out, err
 		},
 	)
 
@@ -648,7 +652,8 @@ func (s *Server) registerTools(server *mcp.Server) {
 				return result, tools.EditOutput{}, nil
 			}
 
-			return tools.EditFile(ctx, req, input, ws.Root)
+			res, out, err := tools.EditFile(ctx, req, input, ws.Root)
+			return prefixNotice(res, ws), out, err
 		},
 	)
 
@@ -668,7 +673,8 @@ func (s *Server) registerTools(server *mcp.Server) {
 					result.SetError(err)
 					return result, tools.GrepOutput{}, nil
 				}
-				return tools.GrepFiles(ctx, req, input, ws.Root)
+				res, out, err := tools.GrepFiles(ctx, req, input, ws.Root)
+				return prefixNotice(res, ws), out, err
 			},
 		)
 
@@ -686,7 +692,8 @@ func (s *Server) registerTools(server *mcp.Server) {
 					result.SetError(err)
 					return result, tools.GlobOutput{}, nil
 				}
-				return tools.FindFiles(ctx, req, input, ws.Root)
+				res, out, err := tools.FindFiles(ctx, req, input, ws.Root)
+				return prefixNotice(res, ws), out, err
 			},
 		)
 
@@ -704,7 +711,8 @@ func (s *Server) registerTools(server *mcp.Server) {
 					result.SetError(err)
 					return result, tools.LsOutput{}, nil
 				}
-				return tools.ListDirectory(ctx, req, input, ws.Root)
+				res, out, err := tools.ListDirectory(ctx, req, input, ws.Root)
+				return prefixNotice(res, ws), out, err
 			},
 		)
 	}
@@ -737,7 +745,8 @@ func (s *Server) registerTools(server *mcp.Server) {
 				result.SetError(err)
 				return result, tools.BashOutput{}, nil
 			}
-			return tools.RunBash(ctx, req, input, ws.Root)
+			res, out, err := tools.RunBash(ctx, req, input, ws.Root)
+			return prefixNotice(res, ws), out, err
 		},
 	)
 }
@@ -800,6 +809,18 @@ func (s *Server) serverInstructions() string {
 		inspection,
 		names.Edit, names.Write, names.Mkdir, names.Move, names.Bash, names.Bash, names.Bash,
 	)
+}
+
+// prefixNotice puts a workspace recovery notice in front of a successful tool
+// result, so a caller whose workspaceId went stale learns that the root moved
+// before it reads any paths in the output.
+func prefixNotice(result *mcp.CallToolResult, ws *workspace.Workspace) *mcp.CallToolResult {
+	if ws == nil || ws.Notice == "" || result == nil || result.IsError {
+		return result
+	}
+
+	result.Content = append([]mcp.Content{&mcp.TextContent{Text: ws.Notice}}, result.Content...)
+	return result
 }
 
 func (s *Server) loggingMiddleware(next http.Handler) http.Handler {

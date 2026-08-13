@@ -37,6 +37,10 @@ type Workspace struct {
 	Mode       Mode          `json:"mode"`
 	SourceRoot string        `json:"sourceRoot,omitempty"`
 	Worktree   *WorktreeInfo `json:"worktree,omitempty"`
+
+	// Notice carries a one-off message about automatic recovery. It is set on
+	// the copy handed back to a caller and never on the cached workspace.
+	Notice string `json:"notice,omitempty"`
 }
 
 // WorkspaceContext holds a workspace along with discovered agents files.
@@ -158,7 +162,10 @@ func (r *Registry) defaultRoot() string {
 	return "."
 }
 
-// GetWorkspace retrieves a workspace by ID.
+// GetWorkspace retrieves a workspace by ID. A client that reconnects often
+// sends an identifier this process no longer knows about, so instead of
+// failing the call, an unusable identifier falls back to the most recent
+// workspace and the returned copy carries a notice about the change.
 func (r *Registry) GetWorkspace(id string) (*Workspace, error) {
 	id = strings.TrimSpace(id)
 	if id == "" || strings.EqualFold(id, "default") || strings.EqualFold(id, "latest") || strings.EqualFold(id, "last") {
@@ -180,12 +187,12 @@ func (r *Registry) GetWorkspace(id string) (*Workspace, error) {
 	if r.store != nil {
 		session, err := r.store.GetSession(id)
 		if err != nil {
-			return nil, fmt.Errorf("unknown workspaceId: %s. Call open_workspace first", id)
+			return r.recoverWorkspace(id, "this server has no record of it")
 		}
 
 		root, err := AssertAllowedPath(session.Root, r.cfg.AllowedRoots)
 		if err != nil {
-			return nil, fmt.Errorf("stored workspace root not allowed: %w", err)
+			return r.recoverWorkspace(id, fmt.Sprintf("its root %s is no longer an allowed root", session.Root))
 		}
 
 		ws = &Workspace{
@@ -198,13 +205,69 @@ func (r *Registry) GetWorkspace(id string) (*Workspace, error) {
 		r.workspaces[ws.ID] = ws
 		r.mu.Unlock()
 
-		if r.store != nil {
-			r.store.TouchSession(id)
-		}
+		r.store.TouchSession(id)
 		return ws, nil
 	}
 
-	return nil, fmt.Errorf("unknown workspaceId: %s. Call open_workspace first", id)
+	return r.recoverWorkspace(id, "this server has no record of it")
+}
+
+// recoverWorkspace falls back to a usable workspace so a stale identifier does
+// not fail the call. It never consults GetDefaultWorkspace, which would route
+// back here for the same broken session.
+func (r *Registry) recoverWorkspace(id, reason string) (*Workspace, error) {
+	if ws := r.latestUsableWorkspace(id); ws != nil {
+		return noticeOfRecovery(ws, id, reason), nil
+	}
+
+	wsCtx, err := r.OpenDefaultWorkspace()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"workspaceId %s is unusable because %s, and no replacement workspace could be opened: %w",
+			id, reason, err)
+	}
+	return noticeOfRecovery(wsCtx.Workspace, id, reason), nil
+}
+
+// latestUsableWorkspace restores the most recent stored session whose root is
+// still allowed, skipping the identifier that just failed.
+func (r *Registry) latestUsableWorkspace(skipID string) *Workspace {
+	if r.store == nil {
+		return nil
+	}
+
+	session, err := r.store.GetLatestSession()
+	if err != nil || session.ID == skipID {
+		return nil
+	}
+
+	root, err := AssertAllowedPath(session.Root, r.cfg.AllowedRoots)
+	if err != nil {
+		return nil
+	}
+
+	ws := &Workspace{
+		ID:   session.ID,
+		Root: root,
+		Mode: Mode(session.Mode),
+	}
+
+	r.mu.Lock()
+	r.workspaces[ws.ID] = ws
+	r.mu.Unlock()
+
+	r.store.TouchSession(ws.ID)
+	return ws
+}
+
+// noticeOfRecovery copies a workspace and attaches the explanation, so the
+// cached entry stays clean and the message is delivered exactly once.
+func noticeOfRecovery(ws *Workspace, id, reason string) *Workspace {
+	recovered := *ws
+	recovered.Notice = fmt.Sprintf(
+		"Note: workspaceId %s could not be used because %s. Reconnected to %s (workspaceId %s); paths are relative to that root.",
+		id, reason, recovered.Root, recovered.ID)
+	return &recovered
 }
 
 // GetDefaultWorkspace retrieves the latest workspace, or opens the default root

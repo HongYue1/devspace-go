@@ -4,24 +4,34 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
-// IsPathInsideRoot checks if a path is inside the given root directory.
+// caseInsensitiveFS reports whether path comparison should ignore case.
+// Windows and macOS are case insensitive by default. Linux is not, and folding
+// case there would treat /srv/Docs and /srv/docs as the same directory.
+var caseInsensitiveFS = runtime.GOOS == "windows" || runtime.GOOS == "darwin"
+
+// IsPathInsideRoot reports whether targetPath is the root itself or sits
+// inside it.
 func IsPathInsideRoot(targetPath, root string) bool {
-	// Clean and resolve paths
 	cleanPath := filepath.Clean(targetPath)
 	cleanRoot := filepath.Clean(root)
 
-	// Handle Windows drive letters
-	cleanPath = strings.ToLower(cleanPath)
-	cleanRoot = strings.ToLower(cleanRoot)
+	if caseInsensitiveFS {
+		cleanPath = strings.ToLower(cleanPath)
+		cleanRoot = strings.ToLower(cleanRoot)
+	}
+
+	if cleanPath == cleanRoot {
+		return true
+	}
 
 	if !strings.HasSuffix(cleanRoot, string(filepath.Separator)) {
 		cleanRoot += string(filepath.Separator)
 	}
-
-	return strings.HasPrefix(cleanPath, cleanRoot) || cleanPath == strings.TrimSuffix(cleanRoot, string(filepath.Separator))
+	return strings.HasPrefix(cleanPath, cleanRoot)
 }
 
 // ResolvePath resolves a relative or absolute path against a working directory and validates
@@ -70,19 +80,19 @@ func AssertAllowedPath(absPath string, allowedRoots []string) (string, error) {
 // WalkWorkspace walks a directory tree, skipping blacklisted directories.
 func WalkWorkspace(root string, visitor func(path string, info os.FileInfo) error) error {
 	skipDirs := map[string]bool{
-		".git":         true,
-		".hg":          true,
-		".svn":         true,
+		".git":            true,
+		".hg":             true,
+		".svn":            true,
 		".devspace":       true,
 		".devspace-state": true,
 		".webcoder":       true,
 		".webcoder-state": true,
-		"node_modules": true,
-		"dist":         true,
-		"build":        true,
-		".next":        true,
-		".turbo":       true,
-		".cache":       true,
+		"node_modules":    true,
+		"dist":            true,
+		"build":           true,
+		".next":           true,
+		".turbo":          true,
+		".cache":          true,
 	}
 
 	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
