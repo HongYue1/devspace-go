@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -635,7 +634,7 @@ type BashInput struct {
 	WorkspaceID      string `json:"workspaceId" jsonschema:"Workspace identifier returned by open_workspace."`
 	Command          string `json:"command" jsonschema:"Shell command to run."`
 	WorkingDirectory string `json:"workingDirectory,omitempty" jsonschema:"Optional working directory relative to the workspace root."`
-	Timeout          int    `json:"timeout,omitempty" jsonschema:"Timeout in seconds. Defaults to 30, max 300."`
+	Timeout          int    `json:"timeout,omitempty" jsonschema:"Timeout in seconds. Defaults to 30, max 300. On timeout the whole process tree is terminated and whatever the command printed first is returned."`
 }
 
 // BashOutput represents the output for the bash tool.
@@ -650,13 +649,7 @@ func RunBash(ctx context.Context, req *mcp.CallToolRequest, input BashInput, wsR
 		cwd = filepath.Join(wsRoot, input.WorkingDirectory)
 	}
 
-	timeout := 30
-	if input.Timeout > 0 {
-		timeout = input.Timeout
-		if timeout > 300 {
-			timeout = 300
-		}
-	}
+	timeout := normalizeTimeout(input.Timeout)
 
 	var cmdName string
 	var cmdArgs []string
@@ -673,10 +666,10 @@ func RunBash(ctx context.Context, req *mcp.CallToolRequest, input BashInput, wsR
 			} else {
 				cmdName = "powershell.exe"
 			}
-			cmdArgs = []string{"-NoProfile", "-NonInteractive", "-Command", input.Command}
+			cmdArgs = powerShellArgs(input.Command)
 		default:
 			cmdName = "powershell.exe"
-			cmdArgs = []string{"-NoProfile", "-NonInteractive", "-Command", input.Command}
+			cmdArgs = powerShellArgs(input.Command)
 		}
 	} else {
 		if preferredShell == "sh" {
@@ -689,44 +682,44 @@ func RunBash(ctx context.Context, req *mcp.CallToolRequest, input BashInput, wsR
 		cmdArgs = []string{"-c", input.Command}
 	}
 
-	output, err := runCommand(ctx, cwd, cmdName, cmdArgs, timeout)
-	if err != nil && output == "" {
+	res := runCommand(ctx, cwd, cmdName, cmdArgs, timeout)
+
+	if res.timedOut {
+		report := timeoutReport(res.output, timeout)
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{
+				&mcp.TextContent{Text: report},
+			},
+			IsError: true,
+		}, BashOutput{Result: report}, nil
+	}
+
+	if res.startFailed {
 		result := &mcp.CallToolResult{}
-		result.SetError(fmt.Errorf("command failed: %v", err))
+		result.SetError(fmt.Errorf("command failed to start: %v", res.err))
 		return result, BashOutput{}, nil
 	}
 
-	result := output
-	if err != nil && output != "" {
-		if result != "" {
-			result += "\n"
-		}
-		result += "[stderr] " + err.Error()
+	report := res.output
+	if strings.TrimSpace(report) == "" {
+		report = "(no output)"
 	}
-	if result == "" {
-		result = "(no output)"
+	switch {
+	case res.exitCode > 0:
+		report += fmt.Sprintf("\n[exit code: %d]", res.exitCode)
+	case res.exitCode < 0 && res.err != nil:
+		report += fmt.Sprintf("\n[terminated: %v]", res.err)
 	}
-	result = truncateOutput(result)
+	report = truncateOutput(report)
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
-			&mcp.TextContent{Text: result},
+			&mcp.TextContent{Text: report},
 		},
-	}, BashOutput{Result: result}, nil
+	}, BashOutput{Result: report}, nil
 }
 
 // --- helpers ---
-
-func runCommand(ctx context.Context, cwd, name string, args []string, timeoutSec int) (string, error) {
-	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(timeoutCtx, name, args...)
-	cmd.Dir = cwd
-
-	output, err := cmd.CombinedOutput()
-	return truncateOutput(string(output)), err
-}
 
 func formatSize(size int64) string {
 	const unit = 1024
