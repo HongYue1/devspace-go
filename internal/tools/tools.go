@@ -285,8 +285,10 @@ type EditInput struct {
 
 // EditBlock represents a single find-and-replace operation.
 type EditBlock struct {
-	OldText string `json:"oldText" jsonschema:"Text to replace. Must match uniquely. Line endings and trailing whitespace are ignored if the exact text is not found."`
-	NewText string `json:"newText" jsonschema:"Replacement text."`
+	OldText             string `json:"oldText" jsonschema:"Text to replace. Must match uniquely unless replaceAll or expectedOccurrences is set. Line endings and trailing whitespace are ignored if the exact text is not found."`
+	NewText             string `json:"newText" jsonschema:"Replacement text."`
+	ReplaceAll          bool   `json:"replaceAll,omitempty" jsonschema:"Replace every occurrence instead of requiring a unique match."`
+	ExpectedOccurrences int    `json:"expectedOccurrences,omitempty" jsonschema:"Replace exactly this many occurrences and fail if the file contains a different number."`
 }
 
 // EditOutput represents the output for the edit tool.

@@ -267,6 +267,90 @@ func TestEditRejectsEmptyOldText(t *testing.T) {
 	}
 }
 
+const repeatedSource = "alpha\r\nsame\r\nbeta\r\nsame\r\ngamma\r\nsame\r\n"
+
+func TestEditReplaceAllRewritesEveryOccurrence(t *testing.T) {
+	root, path := writeFixture(t, "repeat.txt", repeatedSource)
+
+	out, _ := runEdit(t, root, EditInput{
+		Path:  "repeat.txt",
+		Edits: []EditBlock{{OldText: "same", NewText: "changed", ReplaceAll: true}},
+	})
+
+	updated := readFixture(t, path)
+	if strings.Contains(updated, "same") {
+		t.Fatalf("replaceAll left occurrences behind:\n%q", updated)
+	}
+	if count := strings.Count(updated, "changed"); count != 3 {
+		t.Fatalf("replaced %d occurrences, want 3:\n%q", count, updated)
+	}
+	if !strings.Contains(out.Result, "3 occurrences") {
+		t.Fatalf("result should report the count:\n%s", out.Result)
+	}
+}
+
+func TestEditExpectedOccurrencesRejectsWrongCount(t *testing.T) {
+	root, path := writeFixture(t, "repeat.txt", repeatedSource)
+
+	message := editError(t, root, EditInput{
+		Path:  "repeat.txt",
+		Edits: []EditBlock{{OldText: "same", NewText: "changed", ExpectedOccurrences: 2}},
+	})
+
+	if !strings.Contains(message, "matches 3 times") || !strings.Contains(message, "expectedOccurrences is 2") {
+		t.Fatalf("unexpected message: %s", message)
+	}
+	if readFixture(t, path) != repeatedSource {
+		t.Fatal("the file was modified despite the count mismatch")
+	}
+}
+
+func TestEditExpectedOccurrencesAcceptsExactCount(t *testing.T) {
+	root, path := writeFixture(t, "repeat.txt", repeatedSource)
+
+	runEdit(t, root, EditInput{
+		Path:  "repeat.txt",
+		Edits: []EditBlock{{OldText: "same", NewText: "changed", ExpectedOccurrences: 3}},
+	})
+
+	if count := strings.Count(readFixture(t, path), "changed"); count != 3 {
+		t.Fatalf("replaced %d occurrences, want 3", count)
+	}
+}
+
+func TestEditDefaultsToUniqueMatch(t *testing.T) {
+	root, _ := writeFixture(t, "repeat.txt", repeatedSource)
+
+	message := editError(t, root, EditInput{
+		Path:  "repeat.txt",
+		Edits: []EditBlock{{OldText: "same", NewText: "changed"}},
+	})
+
+	if !strings.Contains(message, "replaceAll") {
+		t.Fatalf("the ambiguity error should point at replaceAll:\n%s", message)
+	}
+}
+
+// TestEditReplaceAllUsesTolerantMatch covers replaceAll on a block that only
+// matches once trailing whitespace is ignored.
+func TestEditReplaceAllUsesTolerantMatch(t *testing.T) {
+	root, path := writeFixture(t, "repeat.txt", "drop me   \r\nkeep\r\nfiller\r\ndrop me\t\r\nkeep\r\n")
+
+	runEdit(t, root, EditInput{
+		Path: "repeat.txt",
+		Edits: []EditBlock{{
+			OldText:    "drop me\nkeep",
+			NewText:    "gone",
+			ReplaceAll: true,
+		}},
+	})
+
+	updated := readFixture(t, path)
+	if count := strings.Count(updated, "gone"); count != 2 {
+		t.Fatalf("tolerant replaceAll produced %d replacements, want 2:\n%q", count, updated)
+	}
+}
+
 func TestDetectLineEnding(t *testing.T) {
 	cases := []struct {
 		content string

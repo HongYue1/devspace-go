@@ -3,6 +3,7 @@ package tools
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -247,47 +248,75 @@ func editNotFoundError(number int, path, original, content, needle string) error
 	return errors.New(message.String())
 }
 
+// joinLineNumbers renders the 1-based line number of each offset.
+func joinLineNumbers(content string, starts []int) string {
+	numbers := make([]string, 0, len(starts))
+	for _, start := range starts {
+		numbers = append(numbers, strconv.Itoa(lineNumberAt(content, start)))
+	}
+	return strings.Join(numbers, ", ")
+}
+
 // editAmbiguousError lists where the duplicate matches are, so the caller can
 // extend oldText instead of guessing.
 func editAmbiguousError(number int, content string, starts []int) error {
-	lines := make([]string, 0, len(starts))
-	for _, start := range starts {
-		lines = append(lines, fmt.Sprintf("%d", lineNumberAt(content, start)))
-	}
 	return fmt.Errorf(
-		"edit %d: oldText matches %d times (lines %s), must be unique; add surrounding context to oldText",
-		number, len(starts), strings.Join(lines, ", "))
+		"edit %d: oldText matches %d times (lines %s), must be unique; add surrounding context to oldText, or set replaceAll or expectedOccurrences",
+		number, len(starts), joinLineNumbers(content, starts))
 }
 
-// applyEdit replaces one occurrence of oldText, falling back to a whitespace
-// tolerant line match when the exact text is absent.
+// replaceSpans rewrites every span, after checking the match count against
+// what the caller said to expect.
+func replaceSpans(content string, spans [][2]int, edit EditBlock, number int, how string) (string, string, error) {
+	starts := make([]int, 0, len(spans))
+	for _, span := range spans {
+		starts = append(starts, span[0])
+	}
+
+	switch {
+	case edit.ExpectedOccurrences > 0 && len(spans) != edit.ExpectedOccurrences:
+		return "", "", fmt.Errorf(
+			"edit %d: oldText matches %d times (lines %s), expectedOccurrences is %d",
+			number, len(spans), joinLineNumbers(content, starts), edit.ExpectedOccurrences)
+	case edit.ExpectedOccurrences == 0 && !edit.ReplaceAll && len(spans) > 1:
+		return "", "", editAmbiguousError(number, content, starts)
+	}
+
+	// Rewrite from the end so the earlier offsets stay valid.
+	updated := content
+	for i := len(spans) - 1; i >= 0; i-- {
+		updated = updated[:spans[i][0]] + edit.NewText + updated[spans[i][1]:]
+	}
+
+	note := fmt.Sprintf("  edit %d: line %d, %s", number, lineNumberAt(content, starts[0]), how)
+	if len(spans) > 1 {
+		note = fmt.Sprintf("  edit %d: %d occurrences on lines %s, %s",
+			number, len(spans), joinLineNumbers(content, starts), how)
+	}
+	return updated, note, nil
+}
+
+// applyEdit replaces oldText, falling back to a whitespace tolerant line match
+// when the exact text is absent.
 func applyEdit(content string, edit EditBlock, number int, path, original string, allowTolerant bool) (string, string, error) {
 	if edit.OldText == "" {
 		return "", "", fmt.Errorf("edit %d: oldText must not be empty", number)
 	}
+	if edit.ExpectedOccurrences < 0 {
+		return "", "", fmt.Errorf("edit %d: expectedOccurrences must not be negative", number)
+	}
 
 	if starts := findOccurrences(content, edit.OldText); len(starts) > 0 {
-		if len(starts) > 1 {
-			return "", "", editAmbiguousError(number, content, starts)
+		spans := make([][2]int, 0, len(starts))
+		for _, start := range starts {
+			spans = append(spans, [2]int{start, start + len(edit.OldText)})
 		}
-		start := starts[0]
-		note := fmt.Sprintf("  edit %d: line %d, exact match", number, lineNumberAt(content, start))
-		return content[:start] + edit.NewText + content[start+len(edit.OldText):], note, nil
+		return replaceSpans(content, spans, edit, number, "exact match")
 	}
 
 	if allowTolerant {
 		if blocks := findLineBlocks(content, edit.OldText); len(blocks) > 0 {
-			if len(blocks) > 1 {
-				starts := make([]int, 0, len(blocks))
-				for _, block := range blocks {
-					starts = append(starts, block[0])
-				}
-				return "", "", editAmbiguousError(number, content, starts)
-			}
-			start, end := blocks[0][0], blocks[0][1]
-			note := fmt.Sprintf("  edit %d: line %d, matched ignoring trailing whitespace",
-				number, lineNumberAt(content, start))
-			return content[:start] + edit.NewText + content[end:], note, nil
+			return replaceSpans(content, blocks, edit, number, "matched ignoring trailing whitespace")
 		}
 	}
 

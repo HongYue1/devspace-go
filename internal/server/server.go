@@ -627,7 +627,7 @@ func (s *Server) registerTools(server *mcp.Server) {
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        names.Edit,
-			Description: fmt.Sprintf("Edit one file inside an open workspace by replacing exact text blocks. Prefer this over %s for targeted changes. Call open_workspace first and pass workspaceId.", names.Write),
+			Description: fmt.Sprintf("Edit one file inside an open workspace by replacing exact text blocks. Each edit must match uniquely unless you set replaceAll or expectedOccurrences. Set dryRun to report where the edits would land without writing. Prefer this over %s for targeted changes. Call open_workspace first and pass workspaceId.", names.Write),
 			Annotations: &mcp.ToolAnnotations{
 				DestructiveHint: boolPtr(true),
 				IdempotentHint:  false,
