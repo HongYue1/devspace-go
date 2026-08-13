@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,7 +30,6 @@ var skippedDirs = map[string]bool{
 	"node_modules": true, "dist": true, "build": true,
 	".next": true, ".turbo": true, ".cache": true,
 	".devspace": true, ".devspace-state": true, ".webcoder": true, ".webcoder-state": true,
-	"tools": true,
 }
 
 var configuredShell = "auto"
@@ -464,41 +464,68 @@ type GlobOutput struct {
 
 // FindFiles finds files matching a glob pattern.
 func FindFiles(ctx context.Context, req *mcp.CallToolRequest, input GlobInput, wsRoot string) (*mcp.CallToolResult, GlobOutput, error) {
+	pattern := normalizeGlobPattern(input.Pattern)
+	if pattern == "" {
+		pattern = "**/*"
+	}
+	if _, err := compileGlob(pattern); err != nil {
+		result := &mcp.CallToolResult{}
+		result.SetError(fmt.Errorf("invalid glob pattern %q: %v", input.Pattern, err))
+		return result, GlobOutput{}, nil
+	}
+
 	searchPath := wsRoot
 	if input.Path != "" {
 		searchPath = filepath.Join(wsRoot, input.Path)
 	}
 
 	var matches []string
+	truncated := false
+	start := time.Now()
 
-	filepath.Walk(searchPath, func(path string, info os.FileInfo, err error) error {
+	// WalkDir avoids one stat syscall per entry, which matters on large trees.
+	_ = filepath.WalkDir(searchPath, func(entryPath string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		if ctx.Err() != nil || len(matches) >= maxSearchMatches {
+		if ctx.Err() != nil || time.Since(start) > searchWalkTimeout {
 			return filepath.SkipAll
 		}
-		if info.IsDir() {
-			if skippedDirs[info.Name()] {
+		if entry.IsDir() {
+			// Never skip the directory the caller explicitly scoped to.
+			if entryPath != searchPath && skippedDirs[entry.Name()] {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if looksBinaryPath(path) || info.Size() > maxSearchFileBytes {
+
+		// The pattern is matched against the path relative to the search
+		// scope; results stay relative to the workspace root.
+		rel, err := filepath.Rel(searchPath, entryPath)
+		if err != nil || !MatchGlob(pattern, filepath.ToSlash(rel)) {
 			return nil
 		}
-		matched, _ := filepath.Match(input.Pattern, info.Name())
-		if matched {
-			rel, _ := filepath.Rel(wsRoot, path)
-			matches = append(matches, filepath.ToSlash(rel))
+
+		reported, err := filepath.Rel(wsRoot, entryPath)
+		if err != nil {
+			reported = rel
+		}
+		matches = append(matches, filepath.ToSlash(reported))
+		if len(matches) >= maxSearchMatches {
+			truncated = true
+			return filepath.SkipAll
 		}
 		return nil
 	})
 
 	result := strings.Join(matches, "\n")
 	if result == "" {
-		result = fmt.Sprintf("No files found matching: %s", input.Pattern)
-	} else if len(matches) >= maxSearchMatches {
+		scope := "the workspace root"
+		if input.Path != "" {
+			scope = input.Path
+		}
+		result = fmt.Sprintf("No files found matching: %s (searched %s)", input.Pattern, scope)
+	} else if truncated {
 		result += fmt.Sprintf("\n\n[truncated after %d files]", maxSearchMatches)
 	}
 	result = truncateOutput(result)
