@@ -194,13 +194,14 @@ func WriteFile(ctx context.Context, req *mcp.CallToolRequest, input WriteInput, 
 		return result, WriteOutput{}, nil
 	}
 
-	if err := os.WriteFile(absPath, []byte(input.Content), 0644); err != nil {
+	written, err := writeFileAtomic(absPath, []byte(input.Content), existingFileMode(absPath))
+	if err != nil {
 		result := &mcp.CallToolResult{}
-		result.SetError(fmt.Errorf("failed to write file: %v", err))
+		result.SetError(err)
 		return result, WriteOutput{}, nil
 	}
 
-	result := fmt.Sprintf("Wrote %s (%d bytes).", input.Path, len(input.Content))
+	result := fmt.Sprintf("Wrote %s (%d bytes verified on disk).", input.Path, written)
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{Text: result},
@@ -366,14 +367,15 @@ func EditFile(ctx context.Context, req *mcp.CallToolRequest, input EditInput, ws
 		}, EditOutput{Status: "dry_run", Result: message}, nil
 	}
 
-	if err := os.WriteFile(absPath, []byte(output), 0644); err != nil {
+	written, err := writeFileAtomic(absPath, []byte(output), existingFileMode(absPath))
+	if err != nil {
 		result := &mcp.CallToolResult{}
-		result.SetError(fmt.Errorf("failed to write file: %v", err))
+		result.SetError(err)
 		return result, EditOutput{}, nil
 	}
 
-	message := fmt.Sprintf("Edited %s: %d edit(s) applied, %d bytes.\n%s",
-		input.Path, len(input.Edits), len(output), detail)
+	message := fmt.Sprintf("Edited %s: %d edit(s) applied, %d bytes verified on disk.\n%s",
+		input.Path, len(input.Edits), written, detail)
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{Text: message},
