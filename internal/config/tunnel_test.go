@@ -133,6 +133,40 @@ func TestTunnelProvidersListsEveryChoice(t *testing.T) {
 	}
 }
 
+func TestTheNamedTunnelComesFromTheEnvironment(t *testing.T) {
+	clearTunnelEnv(t)
+	tunnelConfigDir(t, "")
+	t.Setenv("WEBCODER_TUNNEL_CLOUDFLARED", "  webcoder  ")
+
+	if cfg := LoadConfig(); cfg.Tunnel.Cloudflared != "webcoder" {
+		t.Errorf("named tunnel is %q, want it trimmed", cfg.Tunnel.Cloudflared)
+	}
+}
+
+func TestTheNamedTunnelComesFromTheFile(t *testing.T) {
+	clearTunnelEnv(t)
+	tunnelConfigDir(t, `{"tunnel":{"provider":"cloudflared","cloudflared":"webcoder"}}`)
+
+	cfg := LoadConfig()
+	if cfg.Tunnel.Provider != TunnelCloudflared {
+		t.Errorf("provider is %q, want cloudflared", cfg.Tunnel.Provider)
+	}
+	if cfg.Tunnel.Cloudflared != "webcoder" {
+		t.Errorf("named tunnel is %q, want webcoder", cfg.Tunnel.Cloudflared)
+	}
+}
+
+// A fresh config has no tunnel named, which is what keeps the quick tunnel as
+// the default behaviour.
+func TestAFreshConfigNamesNoTunnel(t *testing.T) {
+	clearTunnelEnv(t)
+	tunnelConfigDir(t, "")
+
+	if cfg := LoadConfig(); cfg.Tunnel.Cloudflared != "" {
+		t.Errorf("a fresh config already names %q", cfg.Tunnel.Cloudflared)
+	}
+}
+
 // clearTunnelEnv keeps a real environment from leaking into these tests.
 func clearTunnelEnv(t *testing.T) {
 	t.Helper()
@@ -140,6 +174,7 @@ func clearTunnelEnv(t *testing.T) {
 		"WEBCODER_TUNNEL_PROVIDER",
 		"WEBCODER_TUNNEL_DOMAIN",
 		"WEBCODER_TUNNEL_AUTHTOKEN",
+		"WEBCODER_TUNNEL_CLOUDFLARED",
 		"NGROK_AUTHTOKEN",
 	} {
 		t.Setenv(name, "")

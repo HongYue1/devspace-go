@@ -54,6 +54,7 @@ func settings() []setting {
 		tunnelProviderSetting(),
 		tunnelDomainSetting(),
 		tunnelAuthtokenSetting(),
+		tunnelCloudflaredSetting(),
 		shellSetting(),
 		langSetting(),
 		toolModeSetting(),
@@ -241,6 +242,32 @@ func tunnelDomainSetting() setting {
 			return nil
 		},
 		reset: func(c *config.Config) { c.Tunnel.Domain = "" },
+	}
+}
+
+// tunnelCloudflaredSetting names a tunnel made with "cloudflared tunnel create".
+//
+// The hostname routed to it is not asked for here. cloudflared never reports
+// one, so publicUrl supplies it and the tunnel refuses to start without it,
+// which keeps the public URL in a single place.
+func tunnelCloudflaredSetting() setting {
+	return setting{
+		key:  "tunnel.cloudflared",
+		help: "Named Cloudflare tunnel to run, with publicUrl set to its hostname; blank means a new URL each run",
+		env:  "WEBCODER_TUNNEL_CLOUDFLARED",
+		show: func(c *config.Config) string { return c.Tunnel.Cloudflared },
+		parse: func(c *config.Config, value string) error {
+			name := strings.TrimSpace(value)
+			if name == "" {
+				return errors.New("name the tunnel, or reset it to go back to a quick tunnel")
+			}
+			if strings.ContainsAny(name, "/ ") {
+				return fmt.Errorf("want a tunnel name or UUID, got %q", value)
+			}
+			c.Tunnel.Cloudflared = name
+			return nil
+		},
+		reset: func(c *config.Config) { c.Tunnel.Cloudflared = "" },
 	}
 }
 

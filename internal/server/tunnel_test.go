@@ -147,6 +147,91 @@ func TestSummaryHasNoPublicLineWithoutATunnel(t *testing.T) {
 	}
 }
 
+// A named tunnel is a hostname the account already owns and has routed, so it
+// goes first even against a reserved ngrok domain, and it is not retried: it
+// fails for configuration reasons, not cold starts.
+func TestANamedTunnelGoesFirstAndIsNotRetried(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tunnel.Cloudflared = "webcoder"
+	cfg.Tunnel.Domain = "example.ngrok-free.app"
+	cfg.PublicBaseURL = "https://mcp.example.com"
+	server := &Server{cfg: cfg}
+
+	calls := 0
+	url := server.startTunnelWithProviders(
+		refuseNgrok(t),
+		func() string {
+			calls++
+			return "https://mcp.example.com"
+		},
+		refuseProvider(t, "pinggy"),
+	)
+
+	if url != "https://mcp.example.com" {
+		t.Fatalf("got %q, want the tunnel's own hostname", url)
+	}
+	if calls != 1 {
+		t.Fatalf("cloudflared called %d times, want 1", calls)
+	}
+}
+
+// A quick tunnel is no substitute for a named one that failed: the URL would be
+// random, and the client is pointed at the fixed hostname.
+func TestAFailedNamedTunnelDoesNotFallBackToAQuickOne(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tunnel.Cloudflared = "webcoder"
+	cfg.Tunnel.Domain = "example.ngrok-free.app"
+	server := &Server{cfg: cfg}
+
+	calls := 0
+	url := server.startTunnelWithProviders(
+		func() string { return "https://example.ngrok-free.app" },
+		func() string {
+			calls++
+			return ""
+		},
+		refuseProvider(t, "pinggy"),
+	)
+
+	if url != "https://example.ngrok-free.app" {
+		t.Fatalf("got %q, want the reserved domain", url)
+	}
+	if calls != 1 {
+		t.Fatalf("cloudflared called %d times, want 1", calls)
+	}
+}
+
+func TestSummaryCallsANamedTunnelStable(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tunnel.Cloudflared = "webcoder"
+	cfg.PublicBaseURL = "https://mcp.example.com"
+	server := &Server{cfg: cfg, tunnelURL: "https://mcp.example.com"}
+
+	summary := strings.Join(server.startupSummary(), "\n")
+	if !strings.Contains(summary, "https://mcp.example.com (stable)") {
+		t.Errorf("summary does not call the named tunnel stable:\n%s", summary)
+	}
+}
+
+// Announcing the loopback address as the public URL would leave the banner
+// looking right while every client failed to connect.
+func TestALoopbackPublicURLCannotFrontATunnel(t *testing.T) {
+	for _, raw := range []string{
+		"http://127.0.0.1:7676",
+		"http://localhost:7676",
+		"mcp.example.com",
+		"",
+	} {
+		if isRoutableTunnelURL(raw) {
+			t.Errorf("%q was accepted as a public URL", raw)
+		}
+	}
+
+	if !isRoutableTunnelURL("https://mcp.example.com") {
+		t.Error("a routed hostname was refused")
+	}
+}
+
 // refuseProvider returns a provider that fails the test if anything starts it.
 func refuseProvider(t *testing.T, name string) func() string {
 	t.Helper()

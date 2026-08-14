@@ -91,10 +91,16 @@ func TunnelProviders() []TunnelProvider {
 // Domain is an ngrok reserved domain such as "example.ngrok-free.app". With one
 // configured the public URL survives restarts, which is the whole point: an MCP
 // client keeps one URL instead of being re-pointed after every restart.
+//
+// Cloudflared names a tunnel created with "cloudflared tunnel create", which
+// does the same through Cloudflare. The hostname is deliberately not stored
+// here: cloudflared never reports the route it was given, so PublicBaseURL
+// carries it and there is only one place to correct.
 type TunnelConfig struct {
-	Provider  TunnelProvider `json:"provider"`
-	Domain    string         `json:"domain"`
-	Authtoken string         `json:"authtoken"`
+	Provider    TunnelProvider `json:"provider"`
+	Domain      string         `json:"domain"`
+	Authtoken   string         `json:"authtoken"`
+	Cloudflared string         `json:"cloudflared"`
 }
 
 // NormalizeTunnelDomain accepts what people paste from the ngrok dashboard.
@@ -252,6 +258,9 @@ func LoadConfig() *Config {
 	if v := os.Getenv("WEBCODER_TUNNEL_DOMAIN"); v != "" {
 		cfg.Tunnel.Domain = v
 	}
+	if v := os.Getenv("WEBCODER_TUNNEL_CLOUDFLARED"); v != "" {
+		cfg.Tunnel.Cloudflared = strings.TrimSpace(v)
+	}
 	if v := os.Getenv("WEBCODER_TUNNEL_AUTHTOKEN"); v != "" {
 		cfg.Tunnel.Authtoken = strings.TrimSpace(v)
 	} else if v := os.Getenv("NGROK_AUTHTOKEN"); v != "" {
@@ -329,6 +338,9 @@ func LoadConfig() *Config {
 			if fileConfig.Tunnel.Authtoken != "" {
 				cfg.Tunnel.Authtoken = fileConfig.Tunnel.Authtoken
 			}
+			if fileConfig.Tunnel.Cloudflared != "" {
+				cfg.Tunnel.Cloudflared = fileConfig.Tunnel.Cloudflared
+			}
 			if _, ok := raw["skillsEnabled"]; ok {
 				cfg.SkillsEnabled = fileConfig.SkillsEnabled
 			}
@@ -365,6 +377,7 @@ func LoadConfig() *Config {
 		cfg.Tunnel.Provider = TunnelAuto
 	}
 	cfg.Tunnel.Domain = NormalizeTunnelDomain(cfg.Tunnel.Domain)
+	cfg.Tunnel.Cloudflared = strings.TrimSpace(cfg.Tunnel.Cloudflared)
 
 	// Resolve "auto" only after all sources have been merged. This avoids an
 	// unnecessary OS lookup when the config file already specifies a language.

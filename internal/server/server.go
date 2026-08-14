@@ -185,8 +185,14 @@ func (s *Server) startupSummary() []string {
 	}
 
 	if s.tunnelURL != "" {
+		// Only the configured URL is stable. A fallback provider can hand back a
+		// random one while a domain or a tunnel name sits unused in the config,
+		// and calling that stable would invite a client to keep it.
 		stability := "new URL after a restart"
-		if s.cfg.Tunnel.Domain != "" {
+		switch {
+		case s.cfg.Tunnel.Domain != "" && strings.Contains(s.tunnelURL, s.cfg.Tunnel.Domain):
+			stability = "stable"
+		case s.cfg.Tunnel.Cloudflared != "" && s.tunnelURL == strings.TrimRight(s.cfg.PublicBaseURL, "/"):
 			stability = "stable"
 		}
 		fields = append(fields, field{"Public", fmt.Sprintf("%s (%s)", s.tunnelURL, stability)})
@@ -304,16 +310,36 @@ func (s *Server) startTunnel() string {
 // survives restarts, so ngrok goes first. Naming a provider outright skips the
 // fallbacks, because quietly handing back a random URL defeats the point of
 // asking for a fixed one.
+//
+// A named Cloudflare tunnel outranks all of it. Both it and a reserved ngrok
+// domain are stable, but only the tunnel names a hostname the account already
+// owns and has already routed.
 func (s *Server) startTunnelWithProviders(startNgrok, startCloudflared, startPinggy func() string) string {
+	// A named tunnel fails for configuration reasons, a wrong name or missing
+	// credentials, which a second attempt would only repeat.
+	named := s.cfg.Tunnel.Cloudflared != ""
+	runCloudflared := func() string {
+		if named {
+			return startCloudflared()
+		}
+		return retryCloudflared(startCloudflared)
+	}
+
 	switch s.cfg.Tunnel.Provider {
 	case config.TunnelOff:
 		return ""
 	case config.TunnelNgrok:
 		return startNgrok()
 	case config.TunnelCloudflared:
-		return retryCloudflared(startCloudflared)
+		return runCloudflared()
 	case config.TunnelPinggy:
 		return startPinggy()
+	}
+
+	if named {
+		if url := runCloudflared(); url != "" {
+			return url
+		}
 	}
 
 	if s.cfg.Tunnel.Domain != "" || s.cfg.Tunnel.Authtoken != "" {
@@ -322,8 +348,12 @@ func (s *Server) startTunnelWithProviders(startNgrok, startCloudflared, startPin
 		}
 	}
 
-	if url := retryCloudflared(startCloudflared); url != "" {
-		return url
+	// Skipped once a tunnel is named: the same binary has just failed, and a
+	// quick tunnel would hand back a random URL no client is pointed at.
+	if !named {
+		if url := runCloudflared(); url != "" {
+			return url
+		}
 	}
 
 	if url := startPinggy(); url != "" {
@@ -413,7 +443,14 @@ func (s *Server) startPinggy() string {
 }
 
 // startCloudflared creates a tunnel via cloudflared.
+//
+// A configured tunnel name means the account owns a hostname for this server
+// already, so the named tunnel replaces the quick one rather than joining it.
 func (s *Server) startCloudflared() string {
+	if name := s.cfg.Tunnel.Cloudflared; name != "" {
+		return s.startNamedCloudflared(name)
+	}
+
 	tunnelExe := findCloudflaredExecutable()
 	if tunnelExe == "" {
 		return ""
