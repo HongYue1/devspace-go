@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/snakex21/devspace-go/internal/shells"
 )
 
 const (
@@ -130,6 +132,100 @@ func timeoutReport(output string, timeoutSec int) string {
 		return report + "\n(no output before the timeout)"
 	}
 	return report + "\n\n" + truncateOutput(output)
+}
+
+// shellSelection is the shell the bash tool runs, resolved once from the
+// configured preference.
+//
+// Resolution is deliberately forgiving: a preference naming a shell that is
+// not installed falls back to the best detected shell rather than disabling
+// the bash tool, and the reason is kept so startup output, the doctor command
+// and the tool description can all report it.
+type shellSelection struct {
+	shell    shells.Shell
+	fallback string
+	err      error
+}
+
+var (
+	selectionMu sync.Mutex
+	selection   *shellSelection
+)
+
+// currentShell returns the resolved selection, resolving on first use so that
+// a caller which never calls SetShell still gets a working shell.
+func currentShell() shellSelection {
+	selectionMu.Lock()
+	defer selectionMu.Unlock()
+	if selection == nil {
+		resolved := computeSelection(configuredShell)
+		selection = &resolved
+	}
+	return *selection
+}
+
+func setSelection(sel shellSelection) {
+	selectionMu.Lock()
+	defer selectionMu.Unlock()
+	selection = &sel
+}
+
+func computeSelection(preference string) shellSelection {
+	sh, err := shells.Resolve(preference)
+	if err == nil {
+		return shellSelection{shell: sh}
+	}
+
+	pref := strings.ToLower(strings.TrimSpace(preference))
+	if pref == "" || pref == "auto" {
+		return shellSelection{err: err}
+	}
+
+	auto, autoErr := shells.Resolve("auto")
+	if autoErr != nil {
+		return shellSelection{err: err}
+	}
+	return shellSelection{shell: auto, fallback: err.Error()}
+}
+
+// shellArgs hands the command to the chosen shell the way that shell expects.
+func shellArgs(sh shells.Shell, command string) []string {
+	switch sh.Kind {
+	case shells.KindPowerShell:
+		return powerShellArgs(command)
+	case shells.KindCmd:
+		return []string{"/C", command}
+	default:
+		return []string{"-c", command}
+	}
+}
+
+// ShellStatus reports the shell the bash tool will use and, when the
+// configured one could not be used, why.
+func ShellStatus() (label string, fallback string, err error) {
+	sel := currentShell()
+	if sel.err != nil {
+		return "", "", sel.err
+	}
+	return sel.shell.Label(), sel.fallback, nil
+}
+
+// ShellHint describes the chosen shell for the bash tool description, so the
+// caller is told which syntax actually works instead of being told PowerShell
+// unconditionally.
+func ShellHint() string {
+	sel := currentShell()
+	if sel.err != nil {
+		return "No supported shell was found on this machine, so this tool cannot run commands."
+	}
+	switch sel.shell.Kind {
+	case shells.KindPowerShell:
+		return fmt.Sprintf("Commands run in %s (%s), where && is not a command separator (use ;) and 2>&1 is not valid redirection.", sel.shell.ID, sel.shell.Path)
+	case shells.KindCmd:
+		return fmt.Sprintf("Commands run in %s (%s), where && chains commands and 2>&1 redirects.", sel.shell.ID, sel.shell.Path)
+	default:
+		return fmt.Sprintf("Commands run in %s (%s), a POSIX shell where && and 2>&1 both work.", sel.shell.ID, sel.shell.Path)
+	}
 }
 
 // powerShellArgs builds the argument list for powershell.exe.

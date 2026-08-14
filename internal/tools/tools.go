@@ -9,11 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/snakex21/devspace-go/internal/shells"
 )
 
 const (
@@ -33,13 +33,20 @@ var skippedDirs = map[string]bool{
 
 var configuredShell = "auto"
 
-// SetShell configures the shell used by the bash tool.
-// Accepted values: auto, powershell, cmd, bash, sh.
+// SetShell records the shell preference for the bash tool. It accepts "auto",
+// any id reported by the shells package, or an absolute path to an interpreter.
+//
+// The value is no longer lowercased: an absolute path on a case sensitive
+// filesystem has to survive intact. Resolving here rather than on first use
+// means a misconfigured shell is visible in startup output instead of
+// surfacing as a confusing failure on some later command.
 func SetShell(shell string) {
-	configuredShell = strings.ToLower(strings.TrimSpace(shell))
+	configuredShell = strings.TrimSpace(shell)
 	if configuredShell == "" {
 		configuredShell = "auto"
 	}
+	shells.Reset()
+	setSelection(computeSelection(configuredShell))
 }
 
 // ReadInput represents the input for the read tool.
@@ -642,7 +649,9 @@ type BashOutput struct {
 	Result string `json:"result" jsonschema:"Shell command output."`
 }
 
-// RunBash executes a shell command. Uses PowerShell on Windows, bash on Unix.
+// RunBash executes a shell command in the shell reported by currentShell:
+// the configured one when it is installed, otherwise the best one detected on
+// this machine.
 func RunBash(ctx context.Context, req *mcp.CallToolRequest, input BashInput, wsRoot string) (*mcp.CallToolResult, BashOutput, error) {
 	cwd := wsRoot
 	if input.WorkingDirectory != "" {
@@ -651,38 +660,14 @@ func RunBash(ctx context.Context, req *mcp.CallToolRequest, input BashInput, wsR
 
 	timeout := normalizeTimeout(input.Timeout)
 
-	var cmdName string
-	var cmdArgs []string
-	preferredShell := configuredShell
-
-	if runtime.GOOS == "windows" {
-		switch preferredShell {
-		case "cmd", "cmd.exe":
-			cmdName = "cmd.exe"
-			cmdArgs = []string{"/C", input.Command}
-		case "powershell", "powershell.exe", "pwsh":
-			if preferredShell == "pwsh" {
-				cmdName = "pwsh"
-			} else {
-				cmdName = "powershell.exe"
-			}
-			cmdArgs = powerShellArgs(input.Command)
-		default:
-			cmdName = "powershell.exe"
-			cmdArgs = powerShellArgs(input.Command)
-		}
-	} else {
-		if preferredShell == "sh" {
-			cmdName = "sh"
-		} else if preferredShell != "" {
-			cmdName = preferredShell
-		} else {
-			cmdName = "bash"
-		}
-		cmdArgs = []string{"-c", input.Command}
+	sel := currentShell()
+	if sel.err != nil {
+		result := &mcp.CallToolResult{}
+		result.SetError(sel.err)
+		return result, BashOutput{}, nil
 	}
 
-	res := runCommand(ctx, cwd, cmdName, cmdArgs, timeout)
+	res := runCommand(ctx, cwd, sel.shell.Path, shellArgs(sel.shell, input.Command), timeout)
 
 	if res.timedOut {
 		report := timeoutReport(res.output, timeout)
