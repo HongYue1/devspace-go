@@ -39,6 +39,7 @@ type Server struct {
 	cfg        *config.Config
 	httpServer *http.Server
 	tunnelStop context.CancelFunc
+	tunnelURL  string
 	registry   *workspace.Registry
 	store      *store.Store
 }
@@ -93,8 +94,8 @@ func (s *Server) Start() error {
 		Handler: s.loggingMiddleware(mux),
 	}
 
-	// Auto-start Cloudflare Tunnel if available
-	s.startTunnel() // non-fatal
+	// Publishing the server is non-fatal: a local-only run is still useful.
+	s.tunnelURL = s.startTunnel()
 
 	// Graceful shutdown
 	idleConnsClosed := make(chan struct{})
@@ -177,6 +178,14 @@ func (s *Server) startupSummary() []string {
 		fields = append(fields, field{"Shell", shell}, field{"", fallback})
 	default:
 		fields = append(fields, field{"Shell", shell})
+	}
+
+	if s.tunnelURL != "" {
+		stability := "new URL after a restart"
+		if s.cfg.Tunnel.Domain != "" {
+			stability = "stable"
+		}
+		fields = append(fields, field{"Public", fmt.Sprintf("%s (%s)", s.tunnelURL, stability)})
 	}
 
 	fields = append(fields,
@@ -269,15 +278,48 @@ func (t *tunnelLog) report() {
 	}
 }
 
-func (s *Server) startTunnel() string {
-	return s.startTunnelWithProviders(s.startCloudflared, s.startPinggy)
-}
-
-func (s *Server) startTunnelWithProviders(startCloudflared, startPinggy func() string) string {
+// retryCloudflared gives cloudflared a second chance, because its first attempt
+// fails often enough on a cold start to be worth the wait.
+func retryCloudflared(startCloudflared func() string) string {
 	for attempt := 0; attempt < cloudflaredMaxAttempts; attempt++ {
 		if url := startCloudflared(); url != "" {
 			return url
 		}
+	}
+	return ""
+}
+
+func (s *Server) startTunnel() string {
+	return s.startTunnelWithProviders(s.startNgrok, s.startCloudflared, s.startPinggy)
+}
+
+// startTunnelWithProviders picks a provider from the configuration.
+//
+// "auto" keeps the historical order, cloudflared then pinggy, unless a domain or
+// an authtoken is configured: naming either is a clear request for a URL that
+// survives restarts, so ngrok goes first. Naming a provider outright skips the
+// fallbacks, because quietly handing back a random URL defeats the point of
+// asking for a fixed one.
+func (s *Server) startTunnelWithProviders(startNgrok, startCloudflared, startPinggy func() string) string {
+	switch s.cfg.Tunnel.Provider {
+	case config.TunnelOff:
+		return ""
+	case config.TunnelNgrok:
+		return startNgrok()
+	case config.TunnelCloudflared:
+		return retryCloudflared(startCloudflared)
+	case config.TunnelPinggy:
+		return startPinggy()
+	}
+
+	if s.cfg.Tunnel.Domain != "" || s.cfg.Tunnel.Authtoken != "" {
+		if url := startNgrok(); url != "" {
+			return url
+		}
+	}
+
+	if url := retryCloudflared(startCloudflared); url != "" {
+		return url
 	}
 
 	if url := startPinggy(); url != "" {
@@ -289,7 +331,9 @@ func (s *Server) startTunnelWithProviders(startCloudflared, startPinggy func() s
 }
 
 // startPinggy creates a tunnel via pinggy.io using SSH.
-// Uses the same SSH key each time → same URL across restarts.
+//
+// The free service issues a new hostname every session, so this is a fallback
+// that keeps the server reachable, not a way to keep one URL.
 func (s *Server) startPinggy() string {
 	sshPath, err := exec.LookPath("ssh")
 	if err != nil {

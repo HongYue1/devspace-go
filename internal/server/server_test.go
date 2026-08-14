@@ -87,6 +87,7 @@ func TestStartTunnelRetriesCloudflaredBeforePinggy(t *testing.T) {
 	cloudflaredCalls := 0
 	pinggyCalls := 0
 	url := server.startTunnelWithProviders(
+		refuseNgrok(t),
 		func() string {
 			cloudflaredCalls++
 			if cloudflaredCalls == cloudflaredMaxAttempts {
@@ -118,6 +119,7 @@ func TestStartTunnelFallsBackToPinggyAfterCloudflaredRetries(t *testing.T) {
 	cloudflaredCalls := 0
 	pinggyCalls := 0
 	url := server.startTunnelWithProviders(
+		refuseNgrok(t),
 		func() string {
 			cloudflaredCalls++
 			return ""
