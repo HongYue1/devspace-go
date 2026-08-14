@@ -25,16 +25,9 @@ foreach ($t in $targets) {
     $env:GOOS = $t.OS
     $env:GOARCH = $t.Arch
 
-    # Main server (lightweight, no GUI)
+    # Main server
     Write-Output "  [$($t.Dir)] mcp-webcoder (serwer)..."
     go build -o "$platformDir\mcp-webcoder$($t.Ext)" ./cmd/devspace/
-
-    # GUI configurator (Fyne — może nie działać cross-platform)
-    Write-Output "  [$($t.Dir)] mcp-webcoder-gui (konfigurator)..."
-    go build -o "$platformDir\mcp-webcoder-gui$($t.Ext)" ./cmd/devspace-gui/ 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Output "         (GUI niedostępne na tej platformie przy cross-kompilacji)"
-    }
 
     Write-Output ""
 }
@@ -66,7 +59,4 @@ foreach ($t in $targets) {
     Write-Output ""
 }
 
-Write-Output "Razem: serwer (4 platformy) + GUI (bieżąca platforma)"
-Write-Output ""
-Write-Output "UWAGA: GUI (Fyne) działa tylko na platformie na której kompilujesz."
-Write-Output "Na Linux/macOS skompiluj GUI natywnie na tych systemach."
+Write-Output "Server built for 4 platforms."

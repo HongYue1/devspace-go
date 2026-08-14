@@ -30,10 +30,6 @@ for i in "${!PLATFORMS[@]}"; do
     GOOS=$os GOARCH=$arch go build -o "build/$dir/devspace$ext" ./cmd/devspace/
     echo "        -> build/$dir/devspace$ext"
 
-    echo "  [$dir] devspace-gui (konfigurator)..."
-    GOOS=$os GOARCH=$arch go build -o "build/$dir/devspace-gui$ext" ./cmd/devspace-gui/ 2>/dev/null || \
-        echo "        (GUI niedostępne przy cross-kompilacji — skompiluj natywnie)"
-
     echo ""
 done
 

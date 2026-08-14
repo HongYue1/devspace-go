@@ -33,13 +33,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # Fyne needs OpenGL and X11 headers to compile the GUI on Linux.
-      - name: Install GUI build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgl1-mesa-dev xorg-dev libxkbcommon-dev
-
       # Checked on Linux only: a Windows checkout may convert line endings,
       # which gofmt reports as a formatting difference.
       - name: gofmt
@@ -89,20 +82,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Install GUI build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgl1-mesa-dev xorg-dev libxkbcommon-dev
-
-      # Built natively per platform, because the Fyne GUI cannot be cross compiled.
+      # Built natively per platform so each artifact matches its runner.
       - name: Build server
         run: |
           mkdir -p dist
           go build -trimpath -o "dist/mcp-webcoder${{ matrix.ext }}" ./cmd/devspace/
-
-      - name: Build GUI configurator
-        run: go build -trimpath -o "dist/mcp-webcoder-gui${{ matrix.ext }}" ./cmd/devspace-gui/
 
       - name: Bundle portable tools
         run: |
