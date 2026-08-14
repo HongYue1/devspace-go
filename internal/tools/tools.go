@@ -200,7 +200,9 @@ func WriteFile(ctx context.Context, req *mcp.CallToolRequest, input WriteInput, 
 		return result, WriteOutput{}, nil
 	}
 
-	written, err := writeFileAtomic(absPath, []byte(input.Content), existingFileMode(absPath))
+	content, keptCRLF := matchExistingLineEnding(absPath, input.Content)
+
+	written, err := writeFileAtomic(absPath, []byte(content), existingFileMode(absPath))
 	if err != nil {
 		result := &mcp.CallToolResult{}
 		result.SetError(err)
@@ -208,6 +210,9 @@ func WriteFile(ctx context.Context, req *mcp.CallToolRequest, input WriteInput, 
 	}
 
 	result := fmt.Sprintf("Wrote %s (%d bytes verified on disk).", input.Path, written)
+	if keptCRLF {
+		result = fmt.Sprintf("Wrote %s (%d bytes verified on disk, CRLF line endings kept).", input.Path, written)
+	}
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{Text: result},

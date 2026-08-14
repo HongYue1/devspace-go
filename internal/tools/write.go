@@ -6,6 +6,22 @@ import (
 	"path/filepath"
 )
 
+// matchExistingLineEnding rewrites content to use the line ending the file on
+// disk already uses, so rewriting one file in a CRLF worktree does not leave it
+// as the only LF file in the tree. A file that does not exist yet, or one that
+// already mixes both endings, is written exactly as the caller sent it.
+func matchExistingLineEnding(path, content string) (string, bool) {
+	existing, err := os.ReadFile(path)
+	if err != nil {
+		return content, false
+	}
+	current := string(existing)
+	if hasMixedLineEndings(current) || detectLineEnding(current) != lineEndingCRLF {
+		return content, false
+	}
+	return restoreLineEndings(normalizeNewlines(content), lineEndingCRLF), true
+}
+
 // writeFileAtomic writes data through a temporary file in the same directory
 // and renames it into place, so a call that dies part way through leaves the
 // previous file untouched instead of a half written one. It returns the size
