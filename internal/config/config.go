@@ -122,6 +122,7 @@ type Config struct {
 	Port          int           `json:"port"`
 	AllowedRoots  []string      `json:"allowedRoots"`
 	PublicBaseURL string        `json:"publicBaseUrl"`
+	AuthToken     string        `json:"authToken"`
 	StateDir      string        `json:"stateDir"`
 	WorktreeRoot  string        `json:"worktreeRoot"`
 	AgentDir      string        `json:"agentDir"`
@@ -190,6 +191,9 @@ func LoadConfig() *Config {
 	}
 	if v := os.Getenv("WEBCODER_PUBLIC_BASE_URL"); v != "" {
 		cfg.PublicBaseURL = v
+	}
+	if v := os.Getenv("WEBCODER_AUTH_TOKEN"); v != "" {
+		cfg.AuthToken = strings.TrimSpace(v)
 	}
 	if v := os.Getenv("WEBCODER_STATE_DIR"); v != "" {
 		cfg.StateDir = v
@@ -296,6 +300,9 @@ func LoadConfig() *Config {
 			if fileConfig.PublicBaseURL != "" {
 				cfg.PublicBaseURL = fileConfig.PublicBaseURL
 			}
+			if fileConfig.AuthToken != "" {
+				cfg.AuthToken = fileConfig.AuthToken
+			}
 			if fileConfig.StateDir != "" {
 				cfg.StateDir = fileConfig.StateDir
 			}
@@ -378,6 +385,7 @@ func LoadConfig() *Config {
 	}
 	cfg.Tunnel.Domain = NormalizeTunnelDomain(cfg.Tunnel.Domain)
 	cfg.Tunnel.Cloudflared = strings.TrimSpace(cfg.Tunnel.Cloudflared)
+	cfg.AuthToken = strings.TrimSpace(cfg.AuthToken)
 
 	// Resolve "auto" only after all sources have been merged. This avoids an
 	// unnecessary OS lookup when the config file already specifies a language.

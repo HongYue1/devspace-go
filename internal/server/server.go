@@ -94,7 +94,7 @@ func (s *Server) Start() error {
 	// needs, so a write or idle deadline would cut them off mid-answer.
 	s.httpServer = &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.Port),
-		Handler:           s.loggingMiddleware(mux),
+		Handler:           s.loggingMiddleware(s.authMiddleware(mux)),
 		ReadHeaderTimeout: 20 * time.Second,
 	}
 
@@ -196,6 +196,19 @@ func (s *Server) startupSummary() []string {
 			stability = "stable"
 		}
 		fields = append(fields, field{"Public", fmt.Sprintf("%s (%s)", s.tunnelURL, stability)})
+	}
+
+	// Silence on a local-only run, because the machine is the protection there.
+	// Once a public URL exists the absence of a token is the most important
+	// thing on this screen: it is a remote shell for anyone who finds it.
+	switch {
+	case s.cfg.AuthToken != "":
+		fields = append(fields, field{"Auth", "bearer token required"})
+	case s.tunnelURL != "":
+		fields = append(fields,
+			field{"Auth", "OPEN - anyone with the URL can run commands here"},
+			field{"", "close it with: mcp-webcoder config set authToken <token>"},
+		)
 	}
 
 	fields = append(fields,

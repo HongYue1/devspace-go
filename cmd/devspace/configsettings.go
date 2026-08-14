@@ -55,6 +55,7 @@ func settings() []setting {
 		tunnelDomainSetting(),
 		tunnelAuthtokenSetting(),
 		tunnelCloudflaredSetting(),
+		authTokenSetting(),
 		shellSetting(),
 		langSetting(),
 		toolModeSetting(),
@@ -268,6 +269,40 @@ func tunnelCloudflaredSetting() setting {
 			return nil
 		},
 		reset: func(c *config.Config) { c.Tunnel.Cloudflared = "" },
+	}
+}
+
+// minAuthTokenLength is the shortest token accepted. A public URL is scanned
+// within minutes of being routed, so a memorable token is a weak lock on a
+// remote shell; 16 characters is the point where guessing stops being the
+// cheapest way in.
+const minAuthTokenLength = 16
+
+// authTokenSetting protects every endpoint but the health check with a bearer
+// token. It is stored in the config file, which is created private, and never
+// printed back.
+func authTokenSetting() setting {
+	return setting{
+		key:    "authToken",
+		help:   "Bearer token required on every request; generate one with: openssl rand -hex 32",
+		env:    "WEBCODER_AUTH_TOKEN",
+		secret: true,
+		show:   func(c *config.Config) string { return c.AuthToken },
+		parse: func(c *config.Config, value string) error {
+			token := strings.TrimSpace(value)
+			if token == "" {
+				return errors.New("paste a token, or reset it to serve without authentication")
+			}
+			if strings.ContainsAny(token, " \t\r\n") {
+				return errors.New("a bearer token cannot contain whitespace")
+			}
+			if len(token) < minAuthTokenLength {
+				return fmt.Errorf("want at least %d characters, got %d: try openssl rand -hex 32", minAuthTokenLength, len(token))
+			}
+			c.AuthToken = token
+			return nil
+		},
+		reset: func(c *config.Config) { c.AuthToken = "" },
 	}
 }
 

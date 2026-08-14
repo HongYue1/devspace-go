@@ -175,6 +175,7 @@ func clearTunnelEnv(t *testing.T) {
 		"WEBCODER_TUNNEL_DOMAIN",
 		"WEBCODER_TUNNEL_AUTHTOKEN",
 		"WEBCODER_TUNNEL_CLOUDFLARED",
+		"WEBCODER_AUTH_TOKEN",
 		"NGROK_AUTHTOKEN",
 	} {
 		t.Setenv(name, "")
