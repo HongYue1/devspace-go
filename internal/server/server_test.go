@@ -45,7 +45,7 @@ func captureTunnelOutput(t *testing.T, lang string) string {
 	return output.String()
 }
 
-func TestTunnelOutputUsesSelectedLocale(t *testing.T) {
+func TestTunnelOutputIsEnglishOnly(t *testing.T) {
 	tests := []struct {
 		lang       string
 		expected   []string
@@ -54,12 +54,13 @@ func TestTunnelOutputUsesSelectedLocale(t *testing.T) {
 		{
 			lang:       "en",
 			expected:   []string{"TUNNEL ACTIVE", "Paste this in ChatGPT", "try the /sse version"},
-			unexpected: []string{"TUNEL AKTYWNY", "Wklej w ChatGPT", "Jeśli ChatGPT"},
+			unexpected: []string{"TUNEL AKTYWNY", "TUNNEL AKTIV"},
 		},
 		{
+			// English is the only bundled locale, so anything else falls back to it.
 			lang:       "de",
-			expected:   []string{"TUNNEL AKTIV", "Füge dies in ChatGPT", "versuche die /sse-Version"},
-			unexpected: []string{"TUNEL AKTYWNY", "Paste this in ChatGPT"},
+			expected:   []string{"TUNNEL ACTIVE", "Paste this in ChatGPT", "try the /sse version"},
+			unexpected: []string{"TUNNEL AKTIV", "Füge dies in ChatGPT"},
 		},
 	}
 

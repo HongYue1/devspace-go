@@ -117,7 +117,7 @@ All config lives **in the same folder as the executable** (portable):
 | Field | Default | Description |
 |---|---|---|
 | `shell` | `auto` | `auto`, `powershell`, `cmd`, `bash`, `sh` |
-| `lang` | `auto` | Auto-detect from OS. Supports 47 languages |
+| `lang` | `auto` | Interface language. English is the only bundled locale |
 | `toolMode` | `full` | `full` (all tools) or `minimal` (shell only for search) |
 | `toolNaming` | `short` | `short` (read, write) or `legacy` (read_file, write_file) |
 | `tunnel.provider` | `auto` | `auto`, `ngrok`, `cloudflared`, `pinggy`, `off` |
@@ -257,7 +257,7 @@ mcp-webcoder/
 │   └── devspace/           ← CLI + MCP server
 ├── internal/
 │   ├── config/             ← Portable config system
-│   ├── locales/            ← 47 language translations
+│   ├── locales/            ← English interface strings
 │   ├── logger/             ← Structured logging (zerolog)
 │   ├── server/             ← HTTP + MCP + tunnel orchestration
 │   ├── shells/             ← Shell detection
