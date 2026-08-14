@@ -247,10 +247,12 @@ func isAgentEntry(name string) bool {
 	return base == "ngrok" || base == "ngrok.exe"
 }
 
-// writeExecutable lands the agent in one atomic step, so an interrupted install
-// cannot leave a half-written binary that looks usable.
+// writeExecutable lands a downloaded program in one atomic step, so an
+// interrupted install cannot leave a half-written binary that looks usable. The
+// temporary file is named after its target, so a failed install is traceable to
+// the program it was for.
 func writeExecutable(content io.Reader, target string) error {
-	temp, err := os.CreateTemp(filepath.Dir(target), "ngrok-agent-*")
+	temp, err := os.CreateTemp(filepath.Dir(target), filepath.Base(target)+"-*")
 	if err != nil {
 		return err
 	}
