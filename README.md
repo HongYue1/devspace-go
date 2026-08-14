@@ -1,116 +1,140 @@
 # MCP WebCoder
 
-**Give ChatGPT & Claude secure access to your local machine. Turn any MCP host into your coding partner.**
+A self-hosted MCP server that gives AI assistants working access to local projects: reading, editing, searching, deleting, running commands, and following long builds in real folders on a real machine.
 
-MCP WebCoder is a self-hosted MCP server that lets AI assistants read, edit, search, and run code in your real local projects — your files, your tools, your terminal — without uploading anything to a third party. You run it on your machine and expose it through a tunnel you control.
+It is a single Go binary with no runtime dependencies. It listens on localhost, publishes itself through a tunnel when a hosted client needs HTTPS, and keeps every file operation inside a list of approved project roots. Source code never leaves the machine that runs the server.
 
 ---
 
-## Table of Contents
+## What this fork changes
 
-- [Quick Start](#quick-start)
-- [Installation](#installation)
-- [What AI Can Do](#what-ai-can-do)
+This fork begins at upstream [cf8b26a](https://github.com/snakex21/devspace-go/commit/cf8b26a3cfaaa92943efe3c997b170ac9cdc840a) and is 54 commits ahead of it. Upstream worked as a prototype: it opened a workspace and ran tools. It also shipped with no CI, no authentication, and a 54 MB Windows executable committed into the tree. Most of the work since has gone into making the server safe to expose and predictable to change.
+
+| | Upstream at cf8b26a | This fork |
+|---|---|---|
+| **MCP tools** | 11 | 16 |
+| **Tests** | 3 test files | 29 test files, 239 test functions |
+| **CI** | None | gofmt, `go vet`, and tests on Linux, Windows, and macOS; four targets cross-compiled; release assets published from `v*` tags |
+| **Authentication** | None | Bearer token required on every route except `/healthz`, with CLI commands to print and rotate it |
+| **Tunnels** | Cloudflare quick tunnel, when `cloudflared` happened to be present | ngrok reserved domains, named Cloudflare tunnels created by one command, Pinggy, or off |
+| **`cloudflared`** | 54 MB Windows binary committed to the repository | Downloaded on demand for the host platform |
+| **Language** | 51 locale files; an unrecognised system language fell back to Polish | English only |
+| **Binaries** | Server plus a separate GUI | Server only |
+
+The five tools added here are `remove`, `list_roots`, `job_status`, `job_kill`, and `job_list`. Beyond those, `bash` gained a background mode, `grep` gained `caseInsensitive`, `contextLines`, and `maxMatches`, `write` preserves a file's existing line endings instead of normalising them, and the build version is stamped into the binary and reported in the MCP handshake.
+
+---
+
+## Table of contents
+
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Tools](#tools)
 - [Configuration](#configuration)
-- [Tunnel (Remote Access)](#tunnel-remote-access)
-- [Shell Support](#shell-support)
+- [Remote access](#remote-access)
+- [Shells](#shells)
 - [Security](#security)
-- [Building from Source](#building-from-source)
-- [Platform Support](#platform-support)
-- [Project Structure](#project-structure)
+- [Building from source](#building-from-source)
+- [Platform support](#platform-support)
+- [Project layout](#project-layout)
+- [Development](#development)
 
 ---
 
-## Quick Start
+## Requirements
 
-### 1. Download
-Pick your platform from [Releases](../../releases) or build from source:
-```bash
-./scripts/unix/build.sh      # Linux / Mac
-.\scripts\windows\build.ps1   # Windows
-```
+Nothing at runtime: no Node.js, no npm, no Python. Go 1.26 or newer is needed only to build from source.
 
-### 2. Configure
-```bash
-mcp-webcoder config                # Interactive prompts
-mcp-webcoder config set port 7676  # Or change one setting
-```
+Prebuilt archives are attached to each [release](../../releases), one per target:
 
-### 3. Run
-```bash
-mcp-webcoder                  # Starts server. Auto-detects config.
-```
-
-This also starts a tunnel: ngrok when a domain or authtoken is configured, otherwise Cloudflare from `tools/`.
-
-### 4. Connect your MCP client
-```
-https://YOUR-TUNNEL.trycloudflare.com/mcp
-```
-Or locally: `http://127.0.0.1:7676/mcp`
-
-For a URL that never changes and a token to guard it, see [Tunnel](#tunnel-remote-access).
-
----
-
-## Installation
-
-No Node.js, no npm, no Python. Single binary.
-
-| Platform | Download |
+| Target | Asset |
 |---|---|
-| **Windows** | `mcp-webcoder.exe` |
-| **Linux** | `mcp-webcoder` |
-| **macOS Intel** | `mcp-webcoder` |
-| **macOS M-chip** | `mcp-webcoder` |
-
-Requires **Go 1.23+** only if building from source.
+| Windows x64 | `mcp-webcoder-<tag>-windows-amd64.zip` |
+| Linux x64 | `mcp-webcoder-<tag>-linux-amd64.tar.gz` |
+| macOS Intel | `mcp-webcoder-<tag>-macos-amd64.tar.gz` |
+| macOS Apple silicon | `mcp-webcoder-<tag>-macos-arm64.tar.gz` |
 
 ---
 
-## What AI Can Do
+## Quick start
 
-Once connected, the AI can open one of your approved project folders as a workspace:
+**1. Configure.** The interactive wizard asks for the project roots, port, and shell; single settings can also be set directly.
 
-- **Read, write, and edit** files inside the workspace
-- **Create directories, move/rename, and delete files** safely inside the workspace
-- **Search code** with regex, optional case-insensitive matching, and grep-style context lines
-- **Run shell commands** (PowerShell on Windows, bash on Unix), in the foreground or as a background job
-- **List the project roots** it may open, so it never has to guess a path
-- **Discover project instructions** from `AGENTS.md` / `CLAUDE.md`
-- **Auto-configure** with portable `.webcoder/config.json`
+```bash
+mcp-webcoder config
+mcp-webcoder config set port 7676
+```
 
-15 MCP tools: `list_roots`, `open_workspace`, `read`, `write`, `mkdir`, `move`, `remove`, `edit`, `grep`, `glob`, `ls`, `bash`, `job_status`, `job_kill`, `job_list`
+**2. Run.** Configuration is detected automatically, and a tunnel starts alongside the server unless one is turned off.
+
+```bash
+mcp-webcoder serve
+```
+
+**3. Connect a client.** The MCP endpoint is `/mcp` on whichever URL the server prints at startup:
+
+```
+https://example.ngrok-free.app/mcp     # through a tunnel
+http://127.0.0.1:7676/mcp              # on the same machine
+```
+
+A legacy SSE endpoint is served at `/sse` for clients that still expect it. For a URL that survives a restart and a token to guard it, see [Remote access](#remote-access).
+
+---
+
+## Tools
+
+A session starts by opening one of the configured roots as a workspace. Every later call carries the returned `workspaceId`, and every path is resolved inside that root.
+
+| Tool | Purpose |
+|---|---|
+| `list_roots` | The roots this server accepts, with the git branch of each and which one is the default |
+| `open_workspace` | Open a root as a workspace; returns a `workspaceId` and any `AGENTS.md` or `CLAUDE.md` found in it |
+| `open_default_workspace` | The same, without sending a local path, for clients that block absolute paths |
+| `read` | Read a file, optionally from an offset and for a limited number of lines |
+| `write` | Create a file or replace one completely, keeping its existing line endings |
+| `edit` | Replace exact text blocks, with `replaceAll`, `expectedOccurrences`, and `dryRun` |
+| `mkdir` | Create a directory, including missing parents |
+| `move` | Move or rename a file or directory, creating parent directories as needed |
+| `remove` | Delete a file or directory, with `recursive` and `dryRun` |
+| `grep` | Regex search over file contents, with an include glob, `caseInsensitive`, `contextLines`, and `maxMatches` |
+| `glob` | Find files by pattern |
+| `ls` | List a directory |
+| `bash` | Run a shell command, in the foreground or as a background job |
+| `job_status` | Read a background job, streaming output from a cursor and optionally waiting for the end |
+| `job_kill` | Stop a background job and every process it started |
+| `job_list` | The tracked jobs, newest first |
+
+Project instructions are part of the handshake rather than something to hunt for: `open_workspace` returns the contents of `AGENTS.md` or `CLAUDE.md` at the root, and lists any others found deeper in the tree so they can be read before touching the code they describe.
 
 ### Long-running commands
 
-A tool call has to answer while the client is still listening, so a foreground command is capped at 120 seconds. Anything longer belongs in a background job:
+A tool call has to answer while the client is still listening, so a foreground command is capped at 120 seconds and defaults to 30. Anything longer belongs in a background job:
 
 | Step | Call |
 |---|---|
-| **Start** | `bash` with `background: true` — returns a `jobId` immediately |
-| **Follow** | `job_status` with that `jobId`; pass the previous `nextLine` as `sinceLine` to read only new output, or `wait` up to 25s for the job to end |
-| **Stop** | `job_kill` — ends the whole process tree |
-| **Review** | `job_list` — every tracked job, newest first |
+| Start | `bash` with `background: true`, which returns a `jobId` immediately |
+| Follow | `job_status` with that `jobId`; passing the previous `nextLine` as `sinceLine` returns only new output, and `wait` blocks up to 25 seconds for the job to end |
+| Stop | `job_kill`, which ends the whole process tree |
+| Review | `job_list` |
 
-Asking `bash` for a timeout above 120 seconds starts a background job instead of failing halfway through a request that nobody is waiting for any more. A job keeps up to 1 MB of output in memory, drops the oldest lines when it goes past that, and reports how many it dropped — so a watch or a long build can be followed without sleeping in a shell command.
+A `timeout` above 120 seconds starts a background job rather than failing partway through a request nothing is waiting for. A job keeps up to 1 MB of output in memory, discards the oldest lines beyond that and reports how many it discarded, and stops after an hour unless a longer `timeout` is given, up to 24 hours. The newest 64 jobs are tracked, and finished ones are forgotten two hours after they end.
 
 ### Deleting files
 
-`remove` deletes inside the workspace, so an assistant never has to reach for `rm -rf`. It refuses the workspace root and any `.git` directory, needs `recursive` for a directory that is not empty, and takes `dryRun` to report what would go before anything goes.
+`remove` exists so that deleting something does not require handing `rm -rf` to a shell. It refuses the workspace root itself and any `.git` directory, requires `recursive` for a directory that is not empty, and reports what would go when called with `dryRun`.
 
 ---
 
 ## Configuration
 
-All config lives **in the same folder as the executable** (portable):
+Configuration lives beside the executable, so the whole folder stays portable:
 
 ```
 .webcoder/
-└── config.json       ← allowed roots, port, shell, language
+└── config.json
 ```
 
-### config.json
 ```json
 {
   "host": "127.0.0.1",
@@ -134,165 +158,164 @@ All config lives **in the same folder as the executable** (portable):
 
 | Field | Default | Description |
 |---|---|---|
-| `shell` | `auto` | `auto`, `powershell`, `cmd`, `bash`, `sh` |
+| `allowedRoots` | — | Project folders that may be opened. Everything else is refused |
+| `shell` | `auto` | `auto`, `powershell`, `cmd`, `bash`, or `sh` |
 | `lang` | `auto` | Interface language. English is the only bundled locale |
-| `toolMode` | `full` | `full` (all tools) or `minimal` (shell only for search) |
-| `toolNaming` | `short` | `short` (read, write) or `legacy` (read_file, write_file) |
-| `tunnel.provider` | `auto` | `auto`, `ngrok`, `cloudflared`, `pinggy`, `off` |
+| `toolMode` | `full` | `full` registers every tool; `minimal` omits `grep`, `glob`, and `ls`, leaving search to the shell |
+| `toolNaming` | `short` | `short` uses `read` and `write`; `legacy` uses `read_file`, `write_file`, `remove_path`, `run_shell`, and the rest of the older names |
+| `tunnel.provider` | `auto` | `auto`, `ngrok`, `cloudflared`, `pinggy`, or `off` |
 | `tunnel.domain` | — | Reserved ngrok domain, so the URL survives a restart |
 | `tunnel.authtoken` | — | ngrok authtoken. `NGROK_AUTHTOKEN` is honoured too |
 | `tunnel.cloudflared` | — | Named Cloudflare tunnel to run, by name or id |
-| `tunnel.credentials` | — | Cloudflare credentials file; a relative path sits beside config.json |
-| `publicBaseUrl` | — | The URL clients use. The CLI key is `publicUrl` |
+| `tunnel.credentials` | — | Cloudflare credentials file; a relative path sits beside `config.json` |
+| `publicBaseUrl` | — | The URL clients use. The CLI key for it is `publicUrl` |
 | `authToken` | — | Bearer token every request must send. `WEBCODER_AUTH_TOKEN` is honoured too |
 
-Change any of them with `mcp-webcoder config set <key> <value>`. Secrets are stored in the config file and never printed back — `config get` reports them as `set (hidden)`.
-
-No environment variables needed — everything is in the portable config file.
+Any field can be changed with `mcp-webcoder config set <key> <value>`. Secrets are stored in the file and never printed back; `config get` reports them as `set (hidden)`. No environment variables are required.
 
 ---
 
-## Tunnel (Remote Access)
+## Remote access
 
-Web clients need HTTPS, so MCP WebCoder publishes itself through a tunnel:
+Hosted clients require HTTPS, so the server publishes itself through a tunnel:
 
-| Tunnel | URL | Setup |
+| Provider | URL | Setup |
 |---|---|---|
-| **ngrok** | Stable, with a reserved domain | Free account; the agent is fetched into `tools/` on first use |
-| **Cloudflare** | Your own domain, or a new URL every session | `mcp-webcoder tunnel setup` for a domain; nothing to do for a throwaway URL |
-| **Pinggy** | New URL every session | Needs `ssh` on PATH |
+| ngrok | Stable, with a reserved domain | Free account; the agent is fetched on first use |
+| Cloudflare | A chosen hostname, or a throwaway URL per session | `mcp-webcoder tunnel setup` for a hostname; nothing for a throwaway URL |
+| Pinggy | New URL every session | Requires `ssh` on `PATH` |
 
-On `auto`, ngrok goes first when a domain or authtoken is configured, otherwise Cloudflare. Name a provider to skip the rest, or set `off` to stay local.
+On `auto`, ngrok is used when a domain or authtoken is configured and Cloudflare otherwise. Naming a provider skips that choice, and `off` keeps the server local.
 
 ### A URL that survives a restart
 
-Reserve the free domain at [dashboard.ngrok.com/domains](https://dashboard.ngrok.com/domains), copy the token from [your authtoken page](https://dashboard.ngrok.com/get-started/your-authtoken), then:
+Reserve a free domain at [dashboard.ngrok.com/domains](https://dashboard.ngrok.com/domains), copy the token from [the authtoken page](https://dashboard.ngrok.com/get-started/your-authtoken), then:
 
 ```bash
 mcp-webcoder config set tunnel.domain example.ngrok-free.app
-mcp-webcoder config set tunnel.authtoken YOUR_TOKEN
+mcp-webcoder config set tunnel.authtoken TOKEN
 ```
 
-The MCP URL is then `https://example.ngrok-free.app/mcp` every time. The token is stored in the config file and never printed back — `config get tunnel.authtoken` reports `set (hidden)`. A domain pasted as a full link works too.
+The MCP URL is then `https://example.ngrok-free.app/mcp` every session. A domain pasted as a full link is accepted as well. Browsers opening the URL meet ngrok's one-time interstitial page; MCP clients send JSON and pass straight through.
 
-Browsers opening the URL see ngrok's one-time interstitial page; MCP clients send JSON and pass straight through.
+### A hostname on Cloudflare
 
-### Your own domain, through Cloudflare
-
-All you need is a domain already on Cloudflare — the free plan is enough. One command claims a hostname on it:
+Any domain already on Cloudflare works, including on the free plan. One command claims a hostname on it:
 
 ```bash
 mcp-webcoder tunnel setup mcp.example.com
 ```
 
-That command fetches `cloudflared` if `tools/` does not have it, has Cloudflare authorise this machine once in your browser, creates the tunnel, writes its credentials beside your config, points the hostname at it, and generates a bearer token if you do not have one yet. Then:
+That command fetches `cloudflared` if it is missing, has Cloudflare authorise the machine once in a browser, creates the tunnel, writes its credentials beside the config, points the hostname at it, and generates a bearer token if none exists yet. After that, `mcp-webcoder serve` publishes `https://mcp.example.com/mcp` every session, starting `cloudflared` as a child process and stopping it on exit. No service to install and no second window to keep open.
 
-```bash
-mcp-webcoder serve
-```
-
-The MCP URL is `https://mcp.example.com/mcp` every time. The server starts `cloudflared` itself and stops it on exit — no service to install, nothing to keep running in a second window.
-
-Running setup again is safe: an existing tunnel and an existing DNS record are reused rather than replaced. A second argument names the tunnel, which is how another machine adopts one that already exists:
+Running setup again is safe: an existing tunnel and DNS record are reused rather than replaced. A second argument names the tunnel, which is how another machine adopts one that already exists:
 
 ```bash
 mcp-webcoder tunnel setup mcp.example.com webcoder
 ```
 
-| Written | What |
+| Written | Contents |
 |---|---|
 | `.webcoder/config.json` | `tunnel.provider`, `tunnel.cloudflared`, `tunnel.credentials`, `publicBaseUrl`, `authToken` |
 | `.webcoder/cloudflared-<name>.json` | Tunnel credentials, kept with the app so the folder stays portable |
 | `~/.cloudflared/cert.pem` | Cloudflare's one-time authorisation for this machine |
 
-**One thing to watch.** If `~/.cloudflared/config.yml` exists and defines `ingress:` rules, `cloudflared` loads it and may route your hostname by that file rather than the port this server publishes. Both `tunnel setup` and `serve` name the file when they find it; rename it and the tunnel follows the server.
+One conflict is worth knowing about. If `~/.cloudflared/config.yml` exists and defines `ingress:` rules, `cloudflared` loads it and may route the hostname by that file instead of the port this server publishes. Both `tunnel setup` and `serve` name the file when they find it; renaming it lets the tunnel follow the server.
 
 ---
 
-## Shell Support
+## Shells
 
 | OS | Default | Alternatives |
 |---|---|---|
-| **Windows** | PowerShell | `cmd` / `pwsh` |
-| **Linux** | bash | `sh` / any shell |
-| **macOS** | bash | `sh` / `zsh` |
+| Windows | PowerShell | `cmd`, `pwsh` |
+| Linux | bash | `sh`, or any shell on `PATH` |
+| macOS | bash | `sh`, `zsh` |
 
-Set `"shell"` in config.json or run `mcp-webcoder config`.
+The choice is the `shell` field in `config.json`, or a prompt in `mcp-webcoder config`. Whichever shell is active is named in the `bash` tool description, so a client knows which syntax to send.
 
 ---
 
 ## Security
 
-- **Bearer token** — set `authToken` and every request has to carry `Authorization: Bearer <token>`; only `/healthz` stays open
-- **Path containment** — all file ops validated against allowed roots
-- **Tunnel access** — a tunnel puts this server on the internet, so keep a token on it and stop the server when it is not in use
-- **No third-party uploads** — your code never leaves your machine
+A tunnel puts this server on the internet, which makes the token the difference between a private tool and an open shell.
+
+- **Bearer token.** With `authToken` set, every request must carry `Authorization: Bearer <token>`; only `/healthz` stays open. Without one, the server answers anybody who finds the URL.
+- **Path containment.** Every file operation is resolved and checked against the configured roots, and `remove` additionally refuses the roots themselves and `.git` directories.
+- **No third-party upload.** Files are read and written locally; nothing is sent anywhere except to the client that asked for it.
+- **Lifetime.** Stopping the server also stops the tunnel it started.
 
 ```bash
-mcp-webcoder config token       # print the token to paste into the client
-mcp-webcoder config token new   # replace it
+mcp-webcoder config token       # print the token for pasting into a client
+mcp-webcoder config token new   # rotate it
 ```
 
-`mcp-webcoder tunnel setup` generates a token for you. Without one, the server answers anybody who finds the URL.
+`mcp-webcoder tunnel setup` generates a token when none exists.
 
 ---
 
-## Building from Source
+## Building from source
 
 ```bash
-git clone https://github.com/snakex21/devspace-go
+git clone https://github.com/HongYue1/devspace-go
 cd devspace-go
 
-# Build everything (all platforms)
-.\scripts\windows\build.ps1     # Windows
-./scripts/unix/build.sh          # Linux / Mac
-make -f scripts/unix/Makefile    # Linux / Mac (make)
-
-# Build just for current platform
+# current platform
 go build -o mcp-webcoder ./cmd/devspace/
+
+# every target
+./scripts/unix/build.sh
+make -f scripts/unix/Makefile
+.\scripts\windows\build.ps1
 ```
+
+Builds are pure Go with `CGO_ENABLED=0`, so any platform can cross-compile for any other.
 
 ---
 
-## Platform Support
+## Platform support
 
 | Platform | Server |
 |---|---|
-| **Windows** | ✅ |
-| **Linux** | ✅ |
-| **macOS Intel** | ✅ |
-| **macOS M-chip** | ✅ |
-
-Cross-compiles from any platform to any platform.
+| Windows x64 | Supported |
+| Linux x64 | Supported |
+| macOS Intel | Supported |
+| macOS Apple silicon | Supported |
 
 ---
 
-## Project Structure
+## Project layout
 
 ```
-mcp-webcoder/
-├── cmd/
-│   └── devspace/           ← CLI + MCP server
+devspace-go/
+├── cmd/devspace/            CLI, config wizard, tunnel commands, server entry point
 ├── internal/
-│   ├── config/             ← Portable config system
-│   ├── locales/            ← English interface strings
-│   ├── logger/             ← Structured logging (zerolog)
-│   ├── server/             ← HTTP + MCP + tunnel orchestration
-│   ├── shells/             ← Shell detection
-│   ├── store/              ← SQLite workspace sessions
-│   ├── tools/              ← read, write, edit, grep, glob, ls, remove, bash, jobs
-│   ├── tunnel/             ← Finds and fetches ngrok / cloudflared
-│   ├── version/            ← Version stamped in at build time
-│   └── workspace/          ← Workspace & path validation
-├── scripts/
-│   ├── windows/            ← PowerShell build script
-│   ├── unix/               ← Bash + Makefile build scripts
-│   └── userscripts/        ← Tampermonkey auto-approve script
-├── tools/                  ← Connectors downloaded at runtime, not committed
-├── go.mod / go.sum
-└── README.md
+│   ├── config/              Portable configuration and its defaults
+│   ├── locales/             English interface strings
+│   ├── logger/              Structured logging
+│   ├── server/              HTTP routing, MCP registration, auth, tunnel orchestration
+│   ├── shells/              Shell detection and argument handling
+│   ├── store/               SQLite-backed workspace sessions
+│   ├── tools/               read, write, edit, grep, glob, ls, remove, bash, background jobs
+│   ├── tunnel/              Finds, fetches, and runs ngrok and cloudflared
+│   ├── version/             Version stamped in at build time
+│   └── workspace/           Root discovery and path validation
+├── scripts/                 Build scripts and a Tampermonkey auto-approve userscript
+└── .github/workflows/       Test, cross-compile, and release
 ```
+
+Downloaded connectors land in `tools/` beside the executable at runtime and are not committed.
 
 ---
 
-Built in Go. Zero npm. Zero Node.js. One binary.
+## Development
+
+```bash
+go test ./... -count=1
+go vet ./...
+gofmt -l .
+```
+
+CI runs the same three checks on Linux, Windows, and macOS, then cross-compiles all four targets on Linux. Pushing a `v*` tag adds a release job that packages each target and publishes it.
+
+One note for Windows contributors: a checkout that converts line endings makes `gofmt -l .` list nearly every file. CI therefore checks formatting on Linux only, and locally the reliable equivalent is to pipe a file through `gofmt` with its line endings normalised.
