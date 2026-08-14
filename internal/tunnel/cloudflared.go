@@ -204,9 +204,10 @@ func isConnectorEntry(name string) bool {
 	return base == "cloudflared" || base == "cloudflared.exe"
 }
 
-// cloudflaredIngressKey is the config-file key that makes cloudflared refuse
-// --url. A config file it loads on its own therefore decides which port is
-// published, which is the one failure that looks unrelated to its cause.
+// cloudflaredIngressKey is the config-file key that decides the route without
+// being asked. Depending on the version cloudflared either refuses --url or
+// quietly prefers the file, so a config it loads on its own can decide which
+// port is published, which is the one failure that looks unrelated to its cause.
 const cloudflaredIngressKey = "ingress:"
 
 // CloudflaredConfigCandidates lists the config files cloudflared loads by
@@ -226,8 +227,8 @@ func CloudflaredConfigCandidates() []string {
 }
 
 // ConfigFileWithIngress reports the first candidate that defines ingress rules,
-// so the reason cloudflared is about to refuse --url can be named before it
-// does. A commented-out section does not count.
+// so the file that can outrank --url is named before it does any harm. A
+// commented-out section does not count.
 func ConfigFileWithIngress(candidates []string) string {
 	for _, path := range candidates {
 		data, err := os.ReadFile(path)

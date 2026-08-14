@@ -221,9 +221,10 @@ func routeHostname(run cloudflaredRunner, name, hostname string, out io.Writer) 
 	return fmt.Errorf("cloudflared could not point %s at the tunnel: %w\n%s", hostname, err, strings.TrimSpace(routed))
 }
 
-// warnAboutIngressConfig names the file that would otherwise decide the port
-// silently. cloudflared refuses --url when a config it loads defines ingress, so
-// this is the one thing that breaks the server running its own tunnel.
+// warnAboutIngressConfig names the file that would otherwise decide the route
+// silently. cloudflared loads it whether or not this server passes --url, and
+// depending on the version it either refuses the flag or quietly prefers the
+// file, which is the one thing that breaks the server running its own tunnel.
 func warnAboutIngressConfig(out io.Writer) {
 	conflict := tunnel.ConfigFileWithIngress(tunnel.CloudflaredConfigCandidates())
 	if conflict == "" {
@@ -231,7 +232,8 @@ func warnAboutIngressConfig(out io.Writer) {
 	}
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "Careful: %s defines ingress rules.\n", conflict)
-	fmt.Fprintln(out, "cloudflared obeys that file instead of this server, so rename it before serving.")
+	fmt.Fprintln(out, "cloudflared loads that file too, and it can outrank the port this server publishes.")
+	fmt.Fprintln(out, "Rename it if the tunnel does not reach this server.")
 }
 
 // tunnelHostname accepts what a person is likely to paste and returns a bare

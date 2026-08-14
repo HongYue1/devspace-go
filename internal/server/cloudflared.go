@@ -65,8 +65,8 @@ func (s *Server) startNamedCloudflared(name string) string {
 
 	if conflict := configFileWithIngress(cloudflaredConfigCandidates()); conflict != "" {
 		fmt.Println()
-		fmt.Printf("    %s defines ingress rules, so cloudflared will refuse --url\n", conflict)
-		fmt.Println("    rename that file to let this server publish the port it already listens on")
+		fmt.Printf("    %s defines ingress rules, which can outrank the port published here\n", conflict)
+		fmt.Println("    rename that file if the tunnel does not reach this server")
 	}
 
 	fmt.Println()
