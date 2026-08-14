@@ -64,6 +64,8 @@ https://YOUR-TUNNEL.trycloudflare.com/mcp
 ```
 Or locally: `http://127.0.0.1:7676/mcp`
 
+For a URL that never changes and a token to guard it, see [Tunnel](#tunnel-remote-access).
+
 ---
 
 ## Installation
@@ -116,10 +118,13 @@ All config lives **in the same folder as the executable** (portable):
   "lang": "auto",
   "toolMode": "full",
   "toolNaming": "short",
+  "authToken": "",
   "tunnel": {
     "provider": "auto",
     "domain": "",
-    "authtoken": ""
+    "authtoken": "",
+    "cloudflared": "",
+    "credentials": ""
   }
 }
 ```
@@ -133,6 +138,12 @@ All config lives **in the same folder as the executable** (portable):
 | `tunnel.provider` | `auto` | `auto`, `ngrok`, `cloudflared`, `pinggy`, `off` |
 | `tunnel.domain` | — | Reserved ngrok domain, so the URL survives a restart |
 | `tunnel.authtoken` | — | ngrok authtoken. `NGROK_AUTHTOKEN` is honoured too |
+| `tunnel.cloudflared` | — | Named Cloudflare tunnel to run, by name or id |
+| `tunnel.credentials` | — | Cloudflare credentials file; a relative path sits beside config.json |
+| `publicBaseUrl` | — | The URL clients use. The CLI key is `publicUrl` |
+| `authToken` | — | Bearer token every request must send. `WEBCODER_AUTH_TOKEN` is honoured too |
+
+Change any of them with `mcp-webcoder config set <key> <value>`. Secrets are stored in the config file and never printed back — `config get` reports them as `set (hidden)`.
 
 No environment variables needed — everything is in the portable config file.
 
@@ -145,7 +156,7 @@ Web clients need HTTPS, so MCP WebCoder publishes itself through a tunnel:
 | Tunnel | URL | Setup |
 |---|---|---|
 | **ngrok** | Stable, with a reserved domain | Free account; the agent is fetched into `tools/` on first use |
-| **Cloudflare** | New URL every session | `cloudflared.exe` included in `tools/` |
+| **Cloudflare** | Your own domain, or a new URL every session | `mcp-webcoder tunnel setup` for a domain; nothing to do for a throwaway URL |
 | **Pinggy** | New URL every session | Needs `ssh` on PATH |
 
 On `auto`, ngrok goes first when a domain or authtoken is configured, otherwise Cloudflare. Name a provider to skip the rest, or set `off` to stay local.
@@ -163,6 +174,36 @@ The MCP URL is then `https://example.ngrok-free.app/mcp` every time. The token i
 
 Browsers opening the URL see ngrok's one-time interstitial page; MCP clients send JSON and pass straight through.
 
+### Your own domain, through Cloudflare
+
+All you need is a domain already on Cloudflare — the free plan is enough. One command claims a hostname on it:
+
+```bash
+mcp-webcoder tunnel setup mcp.example.com
+```
+
+That command fetches `cloudflared` if `tools/` does not have it, has Cloudflare authorise this machine once in your browser, creates the tunnel, writes its credentials beside your config, points the hostname at it, and generates a bearer token if you do not have one yet. Then:
+
+```bash
+mcp-webcoder serve
+```
+
+The MCP URL is `https://mcp.example.com/mcp` every time. The server starts `cloudflared` itself and stops it on exit — no service to install, nothing to keep running in a second window.
+
+Running setup again is safe: an existing tunnel and an existing DNS record are reused rather than replaced. A second argument names the tunnel, which is how another machine adopts one that already exists:
+
+```bash
+mcp-webcoder tunnel setup mcp.example.com webcoder
+```
+
+| Written | What |
+|---|---|
+| `.webcoder/config.json` | `tunnel.provider`, `tunnel.cloudflared`, `tunnel.credentials`, `publicBaseUrl`, `authToken` |
+| `.webcoder/cloudflared-<name>.json` | Tunnel credentials, kept with the app so the folder stays portable |
+| `~/.cloudflared/cert.pem` | Cloudflare's one-time authorisation for this machine |
+
+**One thing to watch.** If `~/.cloudflared/config.yml` exists and defines `ingress:` rules, `cloudflared` loads it and may route your hostname by that file rather than the port this server publishes. Both `tunnel setup` and `serve` name the file when they find it; rename it and the tunnel follows the server.
+
 ---
 
 ## Shell Support
@@ -179,10 +220,17 @@ Set `"shell"` in config.json or run `mcp-webcoder config`.
 
 ## Security
 
-- **No built-in authentication** — anyone with the public tunnel URL can use the server
+- **Bearer token** — set `authToken` and every request has to carry `Authorization: Bearer <token>`; only `/healthz` stays open
 - **Path containment** — all file ops validated against allowed roots
-- **Tunnel access** — treat the public tunnel URL as a secret and stop the server when it is not in use
+- **Tunnel access** — a tunnel puts this server on the internet, so keep a token on it and stop the server when it is not in use
 - **No third-party uploads** — your code never leaves your machine
+
+```bash
+mcp-webcoder config token       # print the token to paste into the client
+mcp-webcoder config token new   # replace it
+```
+
+`mcp-webcoder tunnel setup` generates a token for you. Without one, the server answers anybody who finds the URL.
 
 ---
 
@@ -227,8 +275,11 @@ mcp-webcoder/
 │   ├── locales/            ← 47 language translations
 │   ├── logger/             ← Structured logging (zerolog)
 │   ├── server/             ← HTTP + MCP + tunnel orchestration
+│   ├── shells/             ← Shell detection
 │   ├── store/              ← SQLite workspace sessions
 │   ├── tools/              ← read, write, edit, grep, glob, ls, bash
+│   ├── tunnel/             ← Finds and fetches ngrok / cloudflared
+│   ├── version/            ← Version stamped in at build time
 │   └── workspace/          ← Workspace & path validation
 ├── scripts/
 │   ├── windows/            ← PowerShell build script
