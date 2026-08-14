@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -118,20 +119,26 @@ func (s *Server) Start() error {
 		close(idleConnsClosed)
 	}()
 
-	log.Info().
-		Str("host", s.cfg.Host).
-		Int("port", s.cfg.Port).
-		Msg(locales.T("server.listening"))
+	// A person reading a console wants one tidy block; a log collector wants
+	// the structured lines. Pick by log format instead of printing both.
+	if s.cfg.Logging.Format == config.LogText {
+		s.printStartupSummary()
+	} else {
+		log.Info().
+			Str("host", s.cfg.Host).
+			Int("port", s.cfg.Port).
+			Msg(locales.T("server.listening"))
 
-	log.Info().
-		Strs("allowed_roots", s.cfg.AllowedRoots).
-		Msg(locales.T("server.roots"))
+		log.Info().
+			Strs("allowed_roots", s.cfg.AllowedRoots).
+			Msg(locales.T("server.roots"))
 
-	log.Info().
-		Bool("skills", s.cfg.SkillsEnabled).
-		Str("tool_mode", string(s.cfg.ToolMode)).
-		Str("tool_naming", string(s.cfg.ToolNaming)).
-		Msg(locales.T("server.config"))
+		log.Info().
+			Bool("skills", s.cfg.SkillsEnabled).
+			Str("tool_mode", string(s.cfg.ToolMode)).
+			Str("tool_naming", string(s.cfg.ToolNaming)).
+			Msg(locales.T("server.config"))
+	}
 
 	if err := s.httpServer.ListenAndServe(); err != http.ErrServerClosed {
 		return fmt.Errorf("server error: %w", err)
@@ -139,6 +146,67 @@ func (s *Server) Start() error {
 
 	<-idleConnsClosed
 	return nil
+}
+
+// startupSummary renders the startup block: what is listening, what it can
+// reach, which shell it will use, and how it is configured.
+func (s *Server) startupSummary() []string {
+	type field struct {
+		label string
+		value string
+	}
+
+	fields := []field{{"Listening", fmt.Sprintf("http://%s:%d", s.cfg.Host, s.cfg.Port)}}
+
+	if len(s.cfg.AllowedRoots) == 0 {
+		fields = append(fields, field{"Roots", "none configured"})
+	}
+	for i, root := range s.cfg.AllowedRoots {
+		label := "Roots"
+		if i > 0 {
+			label = ""
+		}
+		fields = append(fields, field{label, root})
+	}
+
+	shell, fallback, err := tools.ShellStatus()
+	switch {
+	case err != nil:
+		fields = append(fields, field{"Shell", fmt.Sprintf("unavailable: %v", err)})
+	case fallback != "":
+		fields = append(fields, field{"Shell", shell}, field{"", fallback})
+	default:
+		fields = append(fields, field{"Shell", shell})
+	}
+
+	fields = append(fields,
+		field{"Tools", fmt.Sprintf("%s mode, %s names, skills %s",
+			s.cfg.ToolMode, s.cfg.ToolNaming, onOff(s.cfg.SkillsEnabled))},
+		field{"Logs", fmt.Sprintf("%s at %s level, request log %s",
+			s.cfg.Logging.Format, s.cfg.Logging.Level, onOff(s.cfg.Logging.Requests))},
+	)
+
+	lines := make([]string, 0, len(fields))
+	for _, f := range fields {
+		lines = append(lines, fmt.Sprintf("  %-10s %s", f.label, f.value))
+	}
+	return lines
+}
+
+func (s *Server) printStartupSummary() {
+	fmt.Println()
+	fmt.Println("MCP WebCoder")
+	for _, line := range s.startupSummary() {
+		fmt.Println(line)
+	}
+	fmt.Println()
+}
+
+func onOff(enabled bool) string {
+	if enabled {
+		return "on"
+	}
+	return "off"
 }
 
 func (s *Server) streamableMCPHandler() http.Handler {
@@ -157,6 +225,50 @@ func (s *Server) streamableMCPHandler() http.Handler {
 // startTunnel attempts to start a tunnel to expose the server publicly.
 // Tries cloudflared first, falls back to pinggy.
 // Returns the public URL if successful. Non-fatal.
+// tunnelLogLines is how much provider output to keep for a failure report.
+const tunnelLogLines = 12
+
+// tunnelLog keeps the tail of a tunnel provider's output.
+//
+// Every line the provider printed used to go straight to the console, which is
+// what buried the URL under cloudflared's banner and progress messages. The
+// lines are now debug level, and the tail is printed only when the provider
+// fails to produce a URL, so a failure is still explainable.
+type tunnelLog struct {
+	provider string
+	mu       sync.Mutex
+	lines    []string
+}
+
+func newTunnelLog(provider string) *tunnelLog {
+	return &tunnelLog{provider: provider}
+}
+
+func (t *tunnelLog) add(line string) {
+	log.Debug().Str("provider", t.provider).Msg(line)
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.lines = append(t.lines, line)
+	if len(t.lines) > tunnelLogLines {
+		t.lines = t.lines[len(t.lines)-tunnelLogLines:]
+	}
+}
+
+// report prints the captured tail, for when the provider returned no URL.
+func (t *tunnelLog) report() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.lines) == 0 {
+		return
+	}
+
+	fmt.Printf("    last %s output:\n", t.provider)
+	for _, line := range t.lines {
+		fmt.Printf("      %s\n", line)
+	}
+}
+
 func (s *Server) startTunnel() string {
 	return s.startTunnelWithProviders(s.startCloudflared, s.startPinggy)
 }
@@ -210,12 +322,13 @@ func (s *Server) startPinggy() string {
 	// Pinggy prints URL to stdout
 	urlRegex := regexp.MustCompile(`https://[a-zA-Z0-9]+\.(a\.)?pinggy\.(link|io|xyz)`)
 	done := make(chan string, 1)
+	output := newTunnelLog("pinggy")
 
 	go func() {
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
 			line := scanner.Text()
-			fmt.Println(line)
+			output.add(line)
 			if match := urlRegex.FindString(line); match != "" {
 				done <- match
 				return
@@ -228,6 +341,7 @@ func (s *Server) startPinggy() string {
 		scanner := bufio.NewScanner(stderrPipe)
 		for scanner.Scan() {
 			line := scanner.Text()
+			output.add(line)
 			if match := urlRegex.FindString(line); match != "" {
 				select {
 				case done <- match:
@@ -245,6 +359,7 @@ func (s *Server) startPinggy() string {
 		return url
 	case <-time.After(15 * time.Second):
 		cancel()
+		output.report()
 		return ""
 	}
 }
@@ -275,6 +390,7 @@ func (s *Server) startCloudflared() string {
 
 	urlRegex := regexp.MustCompile(`https://[a-zA-Z0-9-]+\.trycloudflare\.com`)
 	done := make(chan string, 1)
+	output := newTunnelLog("cloudflared")
 
 	go func() {
 		scanner := bufio.NewScanner(stdout)
@@ -290,7 +406,7 @@ func (s *Server) startCloudflared() string {
 		scanner := bufio.NewScanner(stderrPipe)
 		for scanner.Scan() {
 			line := scanner.Text()
-			fmt.Println(line)
+			output.add(line)
 			if match := urlRegex.FindString(line); match != "" {
 				select {
 				case done <- match:
@@ -308,6 +424,7 @@ func (s *Server) startCloudflared() string {
 		return url
 	case <-time.After(cloudflaredURLTimeout):
 		cancel()
+		output.report()
 		return ""
 	}
 }
@@ -837,13 +954,41 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		log.Info().
+		// Discovery and CORS preflight probes are most of the traffic and say
+		// nothing about what the client is doing, so they stay at debug even
+		// when request logging is on.
+		event := log.Info
+		if isDiscoveryRequest(r.Method, path) {
+			event = log.Debug
+		}
+
+		event().
 			Str("method", r.Method).
 			Str("path", path).
 			Str("remote_addr", r.RemoteAddr).
 			Dur("duration_ms", time.Since(start)).
 			Msg("http_request")
 	})
+}
+
+// isDiscoveryRequest reports whether a request is a client probe rather than
+// real MCP traffic: metadata endpoints, OAuth discovery, and CORS preflights.
+func isDiscoveryRequest(method, path string) bool {
+	if method == http.MethodOptions {
+		return true
+	}
+	for _, prefix := range []string{
+		"/.well-known/",
+		"/oauth/",
+		"/authorize",
+		"/token",
+		"/favicon.ico",
+	} {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // --- types ---
