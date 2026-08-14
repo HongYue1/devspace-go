@@ -20,35 +20,7 @@ func New(level string, format string, w io.Writer) *Logger {
 	if w == nil {
 		w = os.Stderr
 	}
-
-	zl := zerolog.New(w).With().Timestamp().Logger()
-
-	// Set log level
-	switch level {
-	case "silent":
-		zl = zl.Level(zerolog.Disabled)
-	case "error":
-		zl = zl.Level(zerolog.ErrorLevel)
-	case "warn":
-		zl = zl.Level(zerolog.WarnLevel)
-	case "info":
-		zl = zl.Level(zerolog.InfoLevel)
-	case "debug":
-		zl = zl.Level(zerolog.DebugLevel)
-	default:
-		zl = zl.Level(zerolog.InfoLevel)
-	}
-
-	// Set format
-	if format == "text" {
-		zl = zl.Output(zerolog.ConsoleWriter{
-			Out:        w,
-			TimeFormat: time.RFC3339,
-			NoColor:    true,
-		})
-	}
-
-	return &Logger{zl: zl}
+	return &Logger{zl: build(level, format, w)}
 }
 
 // Info logs at info level.
@@ -84,30 +56,37 @@ func Default() *Logger {
 
 // Init initializes the global logger. Call once at startup.
 func Init(level, format string) {
-	zl := zerolog.New(os.Stderr).With().Timestamp().Logger()
+	log.Logger = build(level, format, os.Stderr)
+}
 
-	switch level {
-	case "silent":
-		zl = zl.Level(zerolog.Disabled)
-	case "error":
-		zl = zl.Level(zerolog.ErrorLevel)
-	case "warn":
-		zl = zl.Level(zerolog.WarnLevel)
-	case "info":
-		zl = zl.Level(zerolog.InfoLevel)
-	case "debug":
-		zl = zl.Level(zerolog.DebugLevel)
-	default:
-		zl = zl.Level(zerolog.InfoLevel)
-	}
-
+// build assembles a logger for one writer, so New and Init cannot drift apart.
+func build(level, format string, w io.Writer) zerolog.Logger {
+	zl := zerolog.New(w).With().Timestamp().Logger().Level(levelOf(level))
 	if format == "text" {
 		zl = zl.Output(zerolog.ConsoleWriter{
-			Out:        os.Stderr,
+			Out:        w,
 			TimeFormat: time.RFC3339,
 			NoColor:    true,
 		})
 	}
+	return zl
+}
 
-	log.Logger = zl
+// levelOf maps a configured name onto a zerolog level, defaulting to info so a
+// typo does not silence the server.
+func levelOf(level string) zerolog.Level {
+	switch level {
+	case "silent":
+		return zerolog.Disabled
+	case "error":
+		return zerolog.ErrorLevel
+	case "warn":
+		return zerolog.WarnLevel
+	case "info":
+		return zerolog.InfoLevel
+	case "debug":
+		return zerolog.DebugLevel
+	default:
+		return zerolog.InfoLevel
+	}
 }
