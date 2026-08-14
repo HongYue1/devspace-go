@@ -32,6 +32,8 @@ func runConfig(args []string, in io.Reader, out io.Writer) int {
 		return runConfigSet(args[1:], out)
 	case "unset", "reset":
 		return runConfigUnset(args[1:], out)
+	case "token":
+		return runConfigToken(args[1:], out)
 	case "keys":
 		for _, key := range settingKeys() {
 			fmt.Fprintln(out, key)
@@ -325,6 +327,8 @@ func printConfigUsage(out io.Writer) {
   mcp-webcoder config set <key> <value>  Change one setting
   mcp-webcoder config unset <key>        Restore the default
   mcp-webcoder config keys               List the setting names
+  mcp-webcoder config token              Print the bearer token
+  mcp-webcoder config token new          Store a new token and print it
   mcp-webcoder config path               Print the config file location
   mcp-webcoder config edit               Open the config file in an editor
 `)

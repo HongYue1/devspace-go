@@ -143,6 +143,7 @@ Configuration:
   mcp-webcoder config show               Print every setting
   mcp-webcoder config set <key> <value>  Change one setting
   mcp-webcoder config path               Print the config file location
+  mcp-webcoder config token              Print the bearer token, or add new to replace it
 
 Environment:
   WEBCODER_ALLOWED_ROOTS       Comma-separated folders the tools may use.
