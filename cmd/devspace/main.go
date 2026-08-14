@@ -1,10 +1,8 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/snakex21/devspace-go/internal/config"
@@ -21,15 +19,11 @@ func main() {
 		case "serve", "start":
 			runServer()
 		case "init":
-			runInit()
+			os.Exit(runConfig(nil, os.Stdin, os.Stdout))
 		case "doctor":
 			runDoctor()
 		case "config":
-			if len(os.Args) > 2 && os.Args[2] == "get" {
-				runConfigShow()
-			} else {
-				fmt.Println("Usage: mcp-webcoder config get")
-			}
+			os.Exit(runConfig(os.Args[2:], os.Stdin, os.Stdout))
 		case "help", "--help", "-h":
 			printHelp()
 		default:
@@ -39,13 +33,12 @@ func main() {
 		return
 	}
 
-	// Default: check config, suggest GUI if missing, otherwise run server
+	// Default: run the server, or say how to configure it first.
 	cfg := config.LoadConfig()
 
 	if len(cfg.AllowedRoots) == 0 {
-		fmt.Fprintln(os.Stderr, "Error: MCP WebCoder nie jest skonfigurowany.")
-		fmt.Fprintln(os.Stderr, "Uruchom konfigurator: mcp-webcoder-gui.exe")
-		fmt.Fprintln(os.Stderr, "Lub tekstowo:         mcp-webcoder.exe init")
+		fmt.Fprintln(os.Stderr, "MCP WebCoder is not configured: no folders are allowed yet.")
+		fmt.Fprintln(os.Stderr, "Run 'mcp-webcoder config' to set one up.")
 		os.Exit(1)
 	}
 	runServerWithConfig(cfg)
@@ -56,7 +49,7 @@ func runServer() {
 
 	if len(cfg.AllowedRoots) == 0 {
 		fmt.Fprintln(os.Stderr, "Error: WEBCODER_ALLOWED_ROOTS must be set.")
-		fmt.Fprintln(os.Stderr, "Run 'mcp-webcoder init' to configure.")
+		fmt.Fprintln(os.Stderr, "Run 'mcp-webcoder config' to configure.")
 		os.Exit(1)
 	}
 
@@ -80,54 +73,6 @@ func runServerWithConfig(cfg *config.Config) {
 		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
 		os.Exit(1)
 	}
-}
-
-func runInit() {
-	fmt.Println("MCP WebCoder Init")
-	fmt.Println("=============")
-	fmt.Println()
-
-	cfg := config.DefaultConfig()
-
-	// Read roots
-	fmt.Print("Allowed roots (comma-separated paths): ")
-	var rootsInput string
-	fmt.Scanln(&rootsInput)
-	if rootsInput != "" {
-		cfg.AllowedRoots = splitAndTrim(rootsInput, ",")
-	} else {
-		home, _ := os.UserHomeDir()
-		cfg.AllowedRoots = []string{home}
-		fmt.Printf("Defaulting to: %s\n", home)
-	}
-
-	// Read port
-	fmt.Printf("Port [%d]: ", cfg.Port)
-	var portInput int
-	fmt.Scanf("%d", &portInput)
-	if portInput > 0 {
-		cfg.Port = portInput
-	}
-
-	// Read public URL
-	fmt.Printf("Public base URL [%s]: ", cfg.PublicBaseURL)
-	var urlInput string
-	fmt.Scanln(&urlInput)
-	if urlInput != "" {
-		cfg.PublicBaseURL = urlInput
-	}
-
-	// Save config
-	if err := saveConfig(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to save config: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Println()
-	fmt.Println("Configuration saved!")
-	fmt.Printf("  Config: %s\n", cfg.ConfigDir)
-	fmt.Println()
-	fmt.Println("Run 'mcp-webcoder serve' to start the server.")
 }
 
 func runDoctor() {
@@ -180,53 +125,32 @@ func runDoctor() {
 	fmt.Println("Ready to serve!")
 }
 
-func runConfigShow() {
-	cfg := config.LoadConfig()
-
-	fmt.Println("MCP WebCoder Configuration")
-	fmt.Println("===========================")
-	fmt.Printf("Host:            %s\n", cfg.Host)
-	fmt.Printf("Port:            %d\n", cfg.Port)
-	fmt.Printf("Public URL:      %s\n", cfg.PublicBaseURL)
-	fmt.Printf("Allowed Roots:   %s\n", strings.Join(cfg.AllowedRoots, ", "))
-	fmt.Printf("State Dir:       %s\n", cfg.StateDir)
-	fmt.Printf("Config Dir:      %s\n", cfg.ConfigDir)
-	fmt.Printf("Agent Dir:       %s\n", cfg.AgentDir)
-	fmt.Printf("Tool Mode:       %s\n", cfg.ToolMode)
-	fmt.Printf("Tool Naming:     %s\n", cfg.ToolNaming)
-	fmt.Printf("Shell:           %s\n", cfg.Shell)
-	fmt.Printf("Język:           %s\n", cfg.Lang)
-	fmt.Printf("Widgets:         %s\n", cfg.Widgets)
-	fmt.Printf("Skills:          %v\n", cfg.SkillsEnabled)
-	fmt.Printf("Log Level:       %s\n", cfg.Logging.Level)
-	fmt.Printf("Log Format:      %s\n", cfg.Logging.Format)
-}
-
 func printHelp() {
-	fmt.Print(`MCP WebCoder — Web MCP Coding Workspace (Go)
+	fmt.Print(`MCP WebCoder - MCP coding workspace over HTTP
 
 Usage:
   mcp-webcoder [command]
 
 Commands:
   serve       Start the MCP server (default)
-  init        Text-based interactive configuration
+  config      Configure interactively, or with get and set
   doctor      Diagnostic checks
-  config get  Show current configuration
+  init        Same as config, kept for older instructions
   help        Show this help
 
-GUI Configurator:
-  mcp-webcoder-gui.exe    Desktop configuration window
+Configuration:
+  mcp-webcoder config                    Interactive prompts
+  mcp-webcoder config show               Print every setting
+  mcp-webcoder config set <key> <value>  Change one setting
+  mcp-webcoder config path               Print the config file location
 
 Environment:
-  WEBCODER_ALLOWED_ROOTS       Required. Comma-separated allowed paths.
+  WEBCODER_ALLOWED_ROOTS       Comma-separated folders the tools may use.
   WEBCODER_PUBLIC_BASE_URL     Public base URL (default: http://127.0.0.1:7676)
   HOST                         Listen host (default: 127.0.0.1)
   PORT                         Listen port (default: 7676)
 `)
 }
-
-// helpers
 
 func splitAndTrim(s, sep string) []string {
 	parts := strings.Split(s, sep)
@@ -237,23 +161,4 @@ func splitAndTrim(s, sep string) []string {
 		}
 	}
 	return result
-}
-
-func saveConfig(cfg *config.Config) error {
-	if err := os.MkdirAll(cfg.ConfigDir, 0700); err != nil {
-		return fmt.Errorf("create config dir: %w", err)
-	}
-
-	configPath := filepath.Join(cfg.ConfigDir, "config.json")
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal config: %w", err)
-	}
-
-	if err := os.WriteFile(configPath, data, 0600); err != nil {
-		return fmt.Errorf("write config: %w", err)
-	}
-
-	fmt.Printf("Configuration saved to %s\n", cfg.ConfigDir)
-	return nil
 }
