@@ -24,10 +24,18 @@ const (
 	maxSearchMatches      = 500
 )
 
+// skippedDirs are folders whose contents are never the source someone is
+// looking for: version-control metadata, fetched dependencies, and this
+// server's own state.
+//
+// "dist" and "build" used to be listed here as well. Plenty of projects keep
+// real, hand-written source in a folder by one of those names, and a search
+// that silently cannot see a folder that exists is worse than one that walks
+// some generated output.
 var skippedDirs = map[string]bool{
 	".git": true, ".hg": true, ".svn": true,
-	"node_modules": true, "dist": true, "build": true,
-	".next": true, ".turbo": true, ".cache": true,
+	"node_modules": true,
+	".next":        true, ".turbo": true, ".cache": true,
 	".devspace": true, ".devspace-state": true, ".webcoder": true, ".webcoder-state": true,
 }
 
