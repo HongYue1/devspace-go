@@ -15,8 +15,8 @@
     "tunnel.active": "TUNNEL ACTIVE",
     "tunnel.paste_chatgpt": "Paste this in ChatGPT as the MCP server URL:",
     "tunnel.try_sse": "If ChatGPT complains, try the /sse version.",
-    "tunnel.pinggy_timeout": "pinggy did not return URL — trying cloudflared...",
-    "tunnel.cloudflared_timeout": "cloudflared did not return URL — server running locally only",
+    "tunnel.pinggy_timeout": "pinggy did not return URL - trying cloudflared...",
+    "tunnel.cloudflared_timeout": "cloudflared did not return URL - server running locally only",
 
     "error.no_config": "MCP WebCoder is not configured.",
     "error.no_roots": "WEBCODER_ALLOWED_ROOTS must be set.",

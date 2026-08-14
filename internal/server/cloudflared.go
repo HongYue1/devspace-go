@@ -70,7 +70,7 @@ func (s *Server) startNamedCloudflared(name string) string {
 	}
 
 	fmt.Println()
-	fmt.Printf("🔗  %s\n", locales.T("tunnel.starting_cloudflared"))
+	fmt.Printf("  %s\n", locales.T("tunnel.starting_cloudflared"))
 	fmt.Printf("    %s\n", tunnelExe)
 	fmt.Printf("    tunnel %s on %s\n", name, public)
 	fmt.Println()
@@ -82,7 +82,7 @@ func (s *Server) startNamedCloudflared(name string) string {
 	stderr, _ := cmd.StderrPipe()
 
 	if err := cmd.Start(); err != nil {
-		fmt.Printf("⚠️  %s (cloudflared): %v\n", locales.T("error.cmd_failed"), err)
+		fmt.Printf("  warning: %s (cloudflared): %v\n", locales.T("error.cmd_failed"), err)
 		cancel()
 		return ""
 	}

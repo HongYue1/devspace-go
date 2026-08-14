@@ -60,7 +60,7 @@ func TestTunnelOutputIsEnglishOnly(t *testing.T) {
 			// English is the only bundled locale, so anything else falls back to it.
 			lang:       "de",
 			expected:   []string{"TUNNEL ACTIVE", "Paste this in ChatGPT", "try the /sse version"},
-			unexpected: []string{"TUNNEL AKTIV", "Füge dies in ChatGPT"},
+			unexpected: []string{"TUNNEL AKTIV", "TUNEL AKTYWNY"},
 		},
 	}
 

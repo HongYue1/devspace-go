@@ -227,7 +227,7 @@ func (s *Server) startupSummary() []string {
 
 func (s *Server) printStartupSummary() {
 	fmt.Println()
-	fmt.Println("MCP WebCoder")
+	fmt.Printf("MCP WebCoder %s\n", version.String())
 	for _, line := range s.startupSummary() {
 		fmt.Println(line)
 	}
@@ -373,7 +373,7 @@ func (s *Server) startTunnelWithProviders(startNgrok, startCloudflared, startPin
 		return url
 	}
 
-	fmt.Printf("⚠️  %s\n", locales.T("tunnel.cloudflared_timeout"))
+	fmt.Printf("  warning: %s\n", locales.T("tunnel.cloudflared_timeout"))
 	return ""
 }
 
@@ -388,7 +388,7 @@ func (s *Server) startPinggy() string {
 	}
 
 	fmt.Println()
-	fmt.Printf("🔗  %s\n", locales.T("tunnel.starting_pinggy"))
+	fmt.Printf("  %s\n", locales.T("tunnel.starting_pinggy"))
 	fmt.Println()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -405,7 +405,7 @@ func (s *Server) startPinggy() string {
 	stderrPipe, _ := cmd.StderrPipe()
 
 	if err := cmd.Start(); err != nil {
-		fmt.Printf("⚠️  %s (pinggy): %v\n", locales.T("error.cmd_failed"), err)
+		fmt.Printf("  warning: %s (pinggy): %v\n", locales.T("error.cmd_failed"), err)
 		cancel()
 		return ""
 	}
@@ -470,7 +470,7 @@ func (s *Server) startCloudflared() string {
 	}
 
 	fmt.Println()
-	fmt.Printf("🔗  %s\n", locales.T("tunnel.starting_cloudflared"))
+	fmt.Printf("  %s\n", locales.T("tunnel.starting_cloudflared"))
 	fmt.Printf("    %s\n", tunnelExe)
 	fmt.Println()
 
@@ -481,7 +481,7 @@ func (s *Server) startCloudflared() string {
 	stderrPipe, _ := cmd.StderrPipe()
 
 	if err := cmd.Start(); err != nil {
-		fmt.Printf("⚠️  %s (cloudflared): %v\n", locales.T("error.cmd_failed"), err)
+		fmt.Printf("  warning: %s (cloudflared): %v\n", locales.T("error.cmd_failed"), err)
 		cancel()
 		return ""
 	}
@@ -534,32 +534,37 @@ func findCloudflaredExecutable() string {
 	return tunnel.FindCloudflared()
 }
 
+// tunnelBannerWidth is the minimum inner width of the tunnel banner, wide
+// enough that a hostname and its path fit without stretching the frame.
+const tunnelBannerWidth = 54
+
 func printTunnelURL(url string) {
 	mcpURL := url + "/mcp"
 	sseURL := url + "/sse"
 	lines := []string{
-		"🌐 " + locales.T("tunnel.active"),
-		mcpURL,
-		sseURL,
+		locales.T("tunnel.active"),
 		"",
 		locales.T("tunnel.paste_chatgpt"),
-		mcpURL,
+		"  MCP  " + mcpURL,
+		"  SSE  " + sseURL,
+		"",
 		locales.T("tunnel.try_sse"),
 	}
-	width := 54
+	width := tunnelBannerWidth
 	for _, line := range lines {
 		if lineWidth := utf8.RuneCountInString(line); lineWidth > width {
 			width = lineWidth
 		}
 	}
 
+	border := "+" + strings.Repeat("-", width+4) + "+"
 	fmt.Println()
-	fmt.Printf("╔%s╗\n", strings.Repeat("═", width+4))
+	fmt.Println(border)
 	for _, line := range lines {
 		padding := strings.Repeat(" ", width-utf8.RuneCountInString(line))
-		fmt.Printf("║  %s%s  ║\n", line, padding)
+		fmt.Printf("|  %s%s  |\n", line, padding)
 	}
-	fmt.Printf("╚%s╝\n", strings.Repeat("═", width+4))
+	fmt.Println(border)
 	fmt.Println()
 }
 
