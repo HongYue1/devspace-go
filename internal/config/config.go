@@ -64,6 +64,52 @@ type LoggingConfig struct {
 	TrustProxy    bool      `json:"trustProxy"`
 }
 
+// TunnelProvider names the service that publishes the local server.
+type TunnelProvider string
+
+const (
+	// TunnelAuto keeps the historical behaviour: cloudflared, then pinggy.
+	TunnelAuto TunnelProvider = "auto"
+	// TunnelNgrok uses the ngrok agent, the only provider here that can hold
+	// the same URL across restarts.
+	TunnelNgrok TunnelProvider = "ngrok"
+	// TunnelCloudflared uses cloudflared, which issues a new URL every run.
+	TunnelCloudflared TunnelProvider = "cloudflared"
+	// TunnelPinggy uses pinggy.io over SSH.
+	TunnelPinggy TunnelProvider = "pinggy"
+	// TunnelOff serves on the local address only.
+	TunnelOff TunnelProvider = "off"
+)
+
+// TunnelProviders lists the accepted provider values in preference order.
+func TunnelProviders() []TunnelProvider {
+	return []TunnelProvider{TunnelAuto, TunnelNgrok, TunnelCloudflared, TunnelPinggy, TunnelOff}
+}
+
+// TunnelConfig describes how the server publishes itself.
+//
+// Domain is an ngrok reserved domain such as "example.ngrok-free.app". With one
+// configured the public URL survives restarts, which is the whole point: an MCP
+// client keeps one URL instead of being re-pointed after every restart.
+type TunnelConfig struct {
+	Provider  TunnelProvider `json:"provider"`
+	Domain    string         `json:"domain"`
+	Authtoken string         `json:"authtoken"`
+}
+
+// NormalizeTunnelDomain accepts what people paste from the ngrok dashboard.
+//
+// A reserved domain is a host name, but the dashboard presents it as a link, so
+// "https://example.ngrok-free.app/" and "example.ngrok-free.app" have to mean
+// the same thing.
+func NormalizeTunnelDomain(domain string) string {
+	domain = strings.TrimSpace(domain)
+	domain = strings.TrimPrefix(domain, "https://")
+	domain = strings.TrimPrefix(domain, "http://")
+	domain = strings.TrimSuffix(domain, "/")
+	return strings.ToLower(domain)
+}
+
 // Config holds all MCP WebCoder server configuration.
 type Config struct {
 	Host          string        `json:"host"`
@@ -82,6 +128,7 @@ type Config struct {
 	SkillsEnabled bool          `json:"skillsEnabled"`
 	SkillPaths    []string      `json:"skillPaths"`
 	AllowedHosts  []string      `json:"allowedHosts"`
+	Tunnel        TunnelConfig  `json:"tunnel"`
 	Logging       LoggingConfig `json:"logging"`
 }
 
@@ -106,6 +153,9 @@ func DefaultConfig() *Config {
 		Widgets:       WidgetFull,
 		SkillsEnabled: true,
 		AllowedHosts:  []string{"*"},
+		Tunnel: TunnelConfig{
+			Provider: TunnelAuto,
+		},
 		Logging: LoggingConfig{
 			Level:         LogInfo,
 			Format:        LogText,
@@ -195,6 +245,20 @@ func LoadConfig() *Config {
 		cfg.Logging.TrustProxy = true
 	}
 
+	// Tunnel config
+	if v := os.Getenv("WEBCODER_TUNNEL_PROVIDER"); v != "" {
+		cfg.Tunnel.Provider = TunnelProvider(strings.ToLower(strings.TrimSpace(v)))
+	}
+	if v := os.Getenv("WEBCODER_TUNNEL_DOMAIN"); v != "" {
+		cfg.Tunnel.Domain = v
+	}
+	if v := os.Getenv("WEBCODER_TUNNEL_AUTHTOKEN"); v != "" {
+		cfg.Tunnel.Authtoken = strings.TrimSpace(v)
+	} else if v := os.Getenv("NGROK_AUTHTOKEN"); v != "" {
+		// The agent reads this variable itself, so honour it here too.
+		cfg.Tunnel.Authtoken = strings.TrimSpace(v)
+	}
+
 	// Load from config file if exists (new path first, old path as migration fallback)
 	configFile := filepath.Join(cfg.ConfigDir, "config.json")
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
@@ -256,6 +320,15 @@ func LoadConfig() *Config {
 			if len(fileConfig.AllowedHosts) > 0 {
 				cfg.AllowedHosts = fileConfig.AllowedHosts
 			}
+			if fileConfig.Tunnel.Provider != "" {
+				cfg.Tunnel.Provider = fileConfig.Tunnel.Provider
+			}
+			if fileConfig.Tunnel.Domain != "" {
+				cfg.Tunnel.Domain = fileConfig.Tunnel.Domain
+			}
+			if fileConfig.Tunnel.Authtoken != "" {
+				cfg.Tunnel.Authtoken = fileConfig.Tunnel.Authtoken
+			}
 			if _, ok := raw["skillsEnabled"]; ok {
 				cfg.SkillsEnabled = fileConfig.SkillsEnabled
 			}
@@ -286,6 +359,12 @@ func LoadConfig() *Config {
 			}
 		}
 	}
+
+	// A config file written by hand can leave the provider out entirely.
+	if cfg.Tunnel.Provider == "" {
+		cfg.Tunnel.Provider = TunnelAuto
+	}
+	cfg.Tunnel.Domain = NormalizeTunnelDomain(cfg.Tunnel.Domain)
 
 	// Resolve "auto" only after all sources have been merged. This avoids an
 	// unnecessary OS lookup when the config file already specifies a language.
