@@ -97,8 +97,17 @@ func FindNgrok() string {
 func searchDirs() []string {
 	var dirs []string
 	if exe, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exe)
-		dirs = append(dirs, filepath.Join(exeDir, "tools"), exeDir)
+		// Every folder from the executable up to the filesystem root, each one
+		// with its tools subfolder. An install that keeps the server in bin/ and
+		// its helpers in a sibling tools/ still finds them.
+		for dir := filepath.Dir(exe); ; {
+			dirs = append(dirs, filepath.Join(dir, "tools"), dir)
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
 	}
 	if wd, err := os.Getwd(); err == nil {
 		dirs = append(dirs, filepath.Join(wd, "tools"), wd)

@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -23,6 +22,7 @@ import (
 	"github.com/snakex21/devspace-go/internal/logger"
 	"github.com/snakex21/devspace-go/internal/store"
 	"github.com/snakex21/devspace-go/internal/tools"
+	"github.com/snakex21/devspace-go/internal/tunnel"
 	"github.com/snakex21/devspace-go/internal/version"
 	"github.com/snakex21/devspace-go/internal/workspace"
 )
@@ -527,45 +527,11 @@ func (s *Server) startCloudflared() string {
 	}
 }
 
+// findCloudflaredExecutable reports where the connector is, or "" when there is
+// none on this machine. The search itself lives in internal/tunnel, beside the
+// code that can download a copy, so both agree on what counts as installed.
 func findCloudflaredExecutable() string {
-	names := []string{"cloudflared.exe", "cloudflared"}
-	var dirs []string
-
-	if exePath, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exePath)
-		for dir := exeDir; dir != ""; dir = filepath.Dir(dir) {
-			dirs = append(dirs, filepath.Join(dir, "tools"), dir)
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				break
-			}
-		}
-	}
-	if wd, err := os.Getwd(); err == nil {
-		dirs = append(dirs, filepath.Join(wd, "tools"), wd)
-	}
-
-	seen := map[string]bool{}
-	for _, dir := range dirs {
-		cleanDir := filepath.Clean(dir)
-		if seen[cleanDir] {
-			continue
-		}
-		seen[cleanDir] = true
-		for _, name := range names {
-			candidate := filepath.Join(cleanDir, name)
-			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-				return candidate
-			}
-		}
-	}
-
-	for _, name := range names {
-		if path, err := exec.LookPath(name); err == nil {
-			return path
-		}
-	}
-	return ""
+	return tunnel.FindCloudflared()
 }
 
 func printTunnelURL(url string) {
