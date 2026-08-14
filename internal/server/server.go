@@ -717,15 +717,16 @@ func (s *Server) registerTools(server *mcp.Server) {
 		)
 	}
 
-	// bash (PowerShell on Windows, bash on Unix)
+	// bash (the shell that was configured, or the best one detected)
+	shellHint := tools.ShellHint()
 	bashDesc := fmt.Sprintf(
-		"Run a shell command inside an open workspace. On Windows the command runs in PowerShell.exe, where && is not a command separator (use ;) and 2>&1 is not valid redirection; on Unix it runs in bash. Commands time out after 30 seconds by default and 300 at most, and on timeout the whole process tree is terminated, so do not start servers or watchers meant to keep running. Use only for tests, builds, git inspection, and commands that are better executed by the shell. Do not use %s to create, move, rename, or modify files. Prefer %s for file inspection, %s for creating directories, %s for moves/renames, and %s/%s for file changes. Call open_workspace first and pass workspaceId.",
-		names.Bash, names.Read, names.Mkdir, names.Move, names.Edit, names.Write,
+		"Run a shell command inside an open workspace. %s Commands time out after 30 seconds by default and 300 at most, and on timeout the whole process tree is terminated, so do not start servers or watchers meant to keep running. Use only for tests, builds, git inspection, and commands that are better executed by the shell. Do not use %s to create, move, rename, or modify files. Prefer %s for file inspection, %s for creating directories, %s for moves/renames, and %s/%s for file changes. Call open_workspace first and pass workspaceId.",
+		shellHint, names.Bash, names.Read, names.Mkdir, names.Move, names.Edit, names.Write,
 	)
 	if s.cfg.ToolMode == config.ToolModeMinimal {
 		bashDesc = fmt.Sprintf(
-			"Run a shell command inside an open workspace. On Windows the command runs in PowerShell.exe, where && is not a command separator (use ;) and 2>&1 is not valid redirection; on Unix it runs in bash. Commands time out after 30 seconds by default and 300 at most, and on timeout the whole process tree is terminated. In minimal tool mode, %s, %s, and %s are disabled; use shell commands for search and directory inspection. Do not use %s to create or modify files. Prefer %s for direct file reads. Call open_workspace first and pass workspaceId.",
-			names.Grep, names.Glob, names.Ls, names.Bash, names.Read,
+			"Run a shell command inside an open workspace. %s Commands time out after 30 seconds by default and 300 at most, and on timeout the whole process tree is terminated. In minimal tool mode, %s, %s, and %s are disabled; use shell commands for search and directory inspection. Do not use %s to create or modify files. Prefer %s for direct file reads. Call open_workspace first and pass workspaceId.",
+			shellHint, names.Grep, names.Glob, names.Ls, names.Bash, names.Read,
 		)
 	}
 
@@ -804,10 +805,10 @@ func (s *Server) serverInstructions() string {
 	agentsMd := "Follow instructions returned by open_workspace. Before working under a path listed in availableAgentsFiles, use read to inspect that instruction file and follow it. "
 
 	return fmt.Sprintf(
-		"Use MCP WebCoder as a local coding workspace. Call open_workspace once per project folder or worktree to obtain a workspaceId; if local absolute paths are blocked by the client, call open_default_workspace instead. Reuse that same workspaceId for all later file, search, edit, write, mkdir, move, and shell tools in that folder. If the workspaceId becomes stale after reconnecting, pass workspaceId 'default' or 'latest' to use the most recent/default workspace. %s%sPrefer %s for targeted modifications, %s only for new files or complete rewrites, %s for directory creation, %s for moves/renames, and %s for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create, move, rename, or modify files with %s. On Windows, %s uses PowerShell.exe; on Unix, bash.",
+		"Use MCP WebCoder as a local coding workspace. Call open_workspace once per project folder or worktree to obtain a workspaceId; if local absolute paths are blocked by the client, call open_default_workspace instead. Reuse that same workspaceId for all later file, search, edit, write, mkdir, move, and shell tools in that folder. If the workspaceId becomes stale after reconnecting, pass workspaceId 'default' or 'latest' to use the most recent/default workspace. %s%sPrefer %s for targeted modifications, %s only for new files or complete rewrites, %s for directory creation, %s for moves/renames, and %s for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create, move, rename, or modify files with %s. %s",
 		agentsMd,
 		inspection,
-		names.Edit, names.Write, names.Mkdir, names.Move, names.Bash, names.Bash, names.Bash,
+		names.Edit, names.Write, names.Mkdir, names.Move, names.Bash, names.Bash, tools.ShellHint(),
 	)
 }
 

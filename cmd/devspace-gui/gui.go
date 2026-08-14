@@ -18,6 +18,7 @@ import (
 
 	devconfig "github.com/snakex21/devspace-go/internal/config"
 	"github.com/snakex21/devspace-go/internal/locales"
+	"github.com/snakex21/devspace-go/internal/shells"
 )
 
 // --- All available languages ---
@@ -28,8 +29,6 @@ var langCodes = []string{
 	"id", "ms", "af", "bn", "ca", "et", "fa", "ga", "hr", "lt",
 	"lv", "mt", "sl", "sr", "sw", "ta", "ur", "zu",
 }
-
-var shellOptions = []string{"auto", "powershell", "cmd", "bash", "sh"}
 
 const (
 	folderDialogScale     = float32(0.75)
@@ -197,7 +196,10 @@ func runGUI(cfg *devconfig.Config) {
 	urlEntry.SetText(cfg.PublicBaseURL)
 	urlEntry.SetPlaceHolder(locales.T("gui.url_placeholder"))
 
-	shellSelect := widget.NewSelect(shellOptions, nil)
+	// Offer only the shells this machine actually has, plus "auto". The fixed
+	// list used to offer bash and sh on Windows machines without them, and hid
+	// installs such as ash that were present.
+	shellSelect := widget.NewSelect(shells.Options(cfg.Shell), nil)
 	if cfg.Shell == "" {
 		cfg.Shell = "auto"
 	}

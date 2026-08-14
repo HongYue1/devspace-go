@@ -10,6 +10,8 @@ import (
 	"github.com/snakex21/devspace-go/internal/config"
 	"github.com/snakex21/devspace-go/internal/locales"
 	"github.com/snakex21/devspace-go/internal/server"
+	"github.com/snakex21/devspace-go/internal/shells"
+	"github.com/snakex21/devspace-go/internal/tools"
 )
 
 func main() {
@@ -144,8 +146,28 @@ func runDoctor() {
 		fmt.Println("[!] No allowed roots configured")
 	}
 
-	// Check shell availability
-	fmt.Println("[ok] Shell available (PowerShell on Windows, bash on Unix)")
+	// Check shell availability. This used to claim PowerShell on Windows and
+	// bash on Unix without looking, which said nothing about whether the
+	// configured shell exists.
+	labels := shells.Describe()
+	if len(labels) == 0 {
+		fmt.Println("[!] No supported shell was found")
+	} else {
+		fmt.Printf("[ok] Shells found: %d\n", len(labels))
+		for _, label := range labels {
+			fmt.Printf("     %s\n", label)
+		}
+	}
+
+	tools.SetShell(cfg.Shell)
+	if label, fallback, err := tools.ShellStatus(); err != nil {
+		fmt.Printf("[!] bash tool: %v\n", err)
+	} else {
+		fmt.Printf("[ok] bash tool will use %s\n", label)
+		if fallback != "" {
+			fmt.Printf("     configured shell unusable: %s\n", fallback)
+		}
+	}
 
 	// Check state directory
 	if _, err := os.Stat(cfg.StateDir); os.IsNotExist(err) {
