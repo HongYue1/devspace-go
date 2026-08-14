@@ -167,6 +167,57 @@ func TestAFreshConfigNamesNoTunnel(t *testing.T) {
 	}
 }
 
+func TestTheCredentialsFileComesFromTheEnvironment(t *testing.T) {
+	clearTunnelEnv(t)
+	tunnelConfigDir(t, "")
+	t.Setenv("WEBCODER_TUNNEL_CREDENTIALS", "  tunnel.json  ")
+
+	if cfg := LoadConfig(); cfg.Tunnel.Credentials != "tunnel.json" {
+		t.Errorf("credentials are %q, want them trimmed", cfg.Tunnel.Credentials)
+	}
+}
+
+func TestTheCredentialsFileComesFromTheFile(t *testing.T) {
+	clearTunnelEnv(t)
+	tunnelConfigDir(t, `{"tunnel":{"provider":"cloudflared","cloudflared":"79b790a5","credentials":"tunnel.json"}}`)
+
+	if cfg := LoadConfig(); cfg.Tunnel.Credentials != "tunnel.json" {
+		t.Errorf("credentials are %q, want tunnel.json", cfg.Tunnel.Credentials)
+	}
+}
+
+// A copied app folder is the point of a relative path: it has to resolve against
+// wherever the folder landed, not the machine it was configured on.
+func TestARelativeCredentialsPathSitsBesideTheConfigFile(t *testing.T) {
+	clearTunnelEnv(t)
+	dir := tunnelConfigDir(t, `{"tunnel":{"credentials":"tunnel.json"}}`)
+
+	want := filepath.Join(dir, "tunnel.json")
+	if got := LoadConfig().CredentialsFile(); got != want {
+		t.Errorf("resolved %q, want %q", got, want)
+	}
+}
+
+func TestAnAbsoluteCredentialsPathIsUsedAsGiven(t *testing.T) {
+	clearTunnelEnv(t)
+	tunnelConfigDir(t, "")
+	absolute := filepath.Join(t.TempDir(), "tunnel.json")
+	t.Setenv("WEBCODER_TUNNEL_CREDENTIALS", absolute)
+
+	if got := LoadConfig().CredentialsFile(); got != absolute {
+		t.Errorf("resolved %q, want %q", got, absolute)
+	}
+}
+
+func TestNoCredentialsResolveToNothing(t *testing.T) {
+	clearTunnelEnv(t)
+	tunnelConfigDir(t, "")
+
+	if got := LoadConfig().CredentialsFile(); got != "" {
+		t.Errorf("resolved %q, want nothing", got)
+	}
+}
+
 // clearTunnelEnv keeps a real environment from leaking into these tests.
 func clearTunnelEnv(t *testing.T) {
 	t.Helper()
@@ -175,6 +226,7 @@ func clearTunnelEnv(t *testing.T) {
 		"WEBCODER_TUNNEL_DOMAIN",
 		"WEBCODER_TUNNEL_AUTHTOKEN",
 		"WEBCODER_TUNNEL_CLOUDFLARED",
+		"WEBCODER_TUNNEL_CREDENTIALS",
 		"WEBCODER_AUTH_TOKEN",
 		"NGROK_AUTHTOKEN",
 	} {

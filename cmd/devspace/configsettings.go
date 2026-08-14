@@ -55,6 +55,7 @@ func settings() []setting {
 		tunnelDomainSetting(),
 		tunnelAuthtokenSetting(),
 		tunnelCloudflaredSetting(),
+		tunnelCredentialsSetting(),
 		authTokenSetting(),
 		shellSetting(),
 		langSetting(),
@@ -269,6 +270,30 @@ func tunnelCloudflaredSetting() setting {
 			return nil
 		},
 		reset: func(c *config.Config) { c.Tunnel.Cloudflared = "" },
+	}
+}
+
+// tunnelCredentialsSetting keeps a named tunnel's credentials with the app.
+//
+// cloudflared stores them under the home folder, which is not copied with the
+// app folder, so a machine that has never logged in cannot run the tunnel. A
+// relative path is resolved against the config folder, which is what makes a
+// copied folder self-contained.
+func tunnelCredentialsSetting() setting {
+	return setting{
+		key:  "tunnel.credentials",
+		help: "Cloudflare tunnel credentials file; a relative path sits beside config.json",
+		env:  "WEBCODER_TUNNEL_CREDENTIALS",
+		show: func(c *config.Config) string { return c.Tunnel.Credentials },
+		parse: func(c *config.Config, value string) error {
+			path := strings.TrimSpace(value)
+			if path == "" {
+				return errors.New("give the path to the credentials file, or reset it to use the cloudflared default")
+			}
+			c.Tunnel.Credentials = path
+			return nil
+		},
+		reset: func(c *config.Config) { c.Tunnel.Credentials = "" },
 	}
 }
 

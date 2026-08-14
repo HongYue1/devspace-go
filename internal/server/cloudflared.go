@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -22,6 +24,11 @@ const namedTunnelTimeout = 45 * time.Second
 // connection. There is nothing else to wait for: the hostname was routed to the
 // tunnel when it was created, not now.
 const namedTunnelReady = "Registered tunnel connection"
+
+// cloudflaredIngressKey is the config-file key that makes cloudflared refuse
+// --url. A config file it loads on its own therefore decides which port is
+// published, which is the one failure that looks unrelated to its cause.
+const cloudflaredIngressKey = "ingress:"
 
 // startNamedCloudflared runs a tunnel the Cloudflare account already owns.
 //
@@ -51,6 +58,22 @@ func (s *Server) startNamedCloudflared(name string) string {
 		return ""
 	}
 
+	credentials := s.cfg.CredentialsFile()
+	if credentials != "" {
+		if _, err := os.Stat(credentials); err != nil {
+			fmt.Println()
+			fmt.Printf("    tunnel.credentials points at %s, which cannot be read\n", credentials)
+			fmt.Println("    create the tunnel again, or reset the setting to use the cloudflared default")
+			return ""
+		}
+	}
+
+	if conflict := configFileWithIngress(cloudflaredConfigCandidates()); conflict != "" {
+		fmt.Println()
+		fmt.Printf("    %s defines ingress rules, so cloudflared will refuse --url\n", conflict)
+		fmt.Println("    rename that file to let this server publish the port it already listens on")
+	}
+
 	fmt.Println()
 	fmt.Printf("🔗  %s\n", locales.T("tunnel.starting_cloudflared"))
 	fmt.Printf("    %s\n", tunnelExe)
@@ -58,11 +81,7 @@ func (s *Server) startNamedCloudflared(name string) string {
 	fmt.Println()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, tunnelExe,
-		"tunnel", "run",
-		"--url", fmt.Sprintf("http://%s:%d", s.cfg.Host, s.cfg.Port),
-		name,
-	)
+	cmd := exec.CommandContext(ctx, tunnelExe, namedTunnelArgs(s.cfg.Host, s.cfg.Port, name, credentials)...)
 
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
@@ -103,6 +122,55 @@ func (s *Server) startNamedCloudflared(name string) string {
 		output.report()
 		return ""
 	}
+}
+
+// namedTunnelArgs builds the cloudflared command line.
+//
+// The origin is passed as --url so it always matches the port this server
+// listens on, and credentials are passed explicitly when configured, so the app
+// folder carries the tunnel rather than the home folder. Credentials identify
+// the tunnel by UUID, so naming it by UUID avoids needing the login
+// certificate as well.
+func namedTunnelArgs(host string, port int, name, credentials string) []string {
+	args := []string{"tunnel", "run", "--url", fmt.Sprintf("http://%s:%d", host, port)}
+	if credentials != "" {
+		args = append(args, "--credentials-file", credentials)
+	}
+	return append(args, name)
+}
+
+// cloudflaredConfigCandidates lists the config files cloudflared loads by
+// itself, in the order it looks for them.
+func cloudflaredConfigCandidates() []string {
+	if explicit := strings.TrimSpace(os.Getenv("TUNNEL_CONFIG")); explicit != "" {
+		return []string{explicit}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	return []string{
+		filepath.Join(home, ".cloudflared", "config.yml"),
+		filepath.Join(home, ".cloudflared", "config.yaml"),
+	}
+}
+
+// configFileWithIngress reports the first candidate that defines ingress rules,
+// so the reason cloudflared is about to refuse --url can be named before it
+// does. A commented-out section does not count.
+func configFileWithIngress(candidates []string) string {
+	for _, path := range candidates {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), cloudflaredIngressKey) {
+				return path
+			}
+		}
+	}
+	return ""
 }
 
 // isRoutableTunnelURL reports whether a configured publicUrl can front a tunnel.

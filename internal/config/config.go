@@ -96,11 +96,16 @@ func TunnelProviders() []TunnelProvider {
 // does the same through Cloudflare. The hostname is deliberately not stored
 // here: cloudflared never reports the route it was given, so PublicBaseURL
 // carries it and there is only one place to correct.
+//
+// Credentials points at the credentials file for that tunnel. cloudflared
+// writes one into the user's home folder, which a copied app folder does not
+// carry, so a path here keeps the tunnel with the app instead of the machine.
 type TunnelConfig struct {
 	Provider    TunnelProvider `json:"provider"`
 	Domain      string         `json:"domain"`
 	Authtoken   string         `json:"authtoken"`
 	Cloudflared string         `json:"cloudflared"`
+	Credentials string         `json:"credentials"`
 }
 
 // NormalizeTunnelDomain accepts what people paste from the ngrok dashboard.
@@ -114,6 +119,22 @@ func NormalizeTunnelDomain(domain string) string {
 	domain = strings.TrimPrefix(domain, "http://")
 	domain = strings.TrimSuffix(domain, "/")
 	return strings.ToLower(domain)
+}
+
+// CredentialsFile resolves where a named tunnel's credentials live.
+//
+// A relative path is taken from the configuration folder, so the setting a
+// copied app folder carries keeps working wherever that folder lands. An
+// absolute path is used as given, for a machine that already has one.
+func (c *Config) CredentialsFile() string {
+	path := strings.TrimSpace(c.Tunnel.Credentials)
+	if path == "" {
+		return ""
+	}
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(c.ConfigDir, path)
 }
 
 // Config holds all MCP WebCoder server configuration.
@@ -265,6 +286,9 @@ func LoadConfig() *Config {
 	if v := os.Getenv("WEBCODER_TUNNEL_CLOUDFLARED"); v != "" {
 		cfg.Tunnel.Cloudflared = strings.TrimSpace(v)
 	}
+	if v := os.Getenv("WEBCODER_TUNNEL_CREDENTIALS"); v != "" {
+		cfg.Tunnel.Credentials = strings.TrimSpace(v)
+	}
 	if v := os.Getenv("WEBCODER_TUNNEL_AUTHTOKEN"); v != "" {
 		cfg.Tunnel.Authtoken = strings.TrimSpace(v)
 	} else if v := os.Getenv("NGROK_AUTHTOKEN"); v != "" {
@@ -347,6 +371,9 @@ func LoadConfig() *Config {
 			}
 			if fileConfig.Tunnel.Cloudflared != "" {
 				cfg.Tunnel.Cloudflared = fileConfig.Tunnel.Cloudflared
+			}
+			if fileConfig.Tunnel.Credentials != "" {
+				cfg.Tunnel.Credentials = fileConfig.Tunnel.Credentials
 			}
 			if _, ok := raw["skillsEnabled"]; ok {
 				cfg.SkillsEnabled = fileConfig.SkillsEnabled
