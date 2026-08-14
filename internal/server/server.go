@@ -89,9 +89,12 @@ func (s *Server) Start() error {
 	)
 	mux.Handle("/sse", sseHandler)
 
+	// Only the header read is bounded: MCP calls stream for as long as the tool
+	// needs, so a write or idle deadline would cut them off mid-answer.
 	s.httpServer = &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.Port),
-		Handler: s.loggingMiddleware(mux),
+		Addr:              fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.Port),
+		Handler:           s.loggingMiddleware(mux),
+		ReadHeaderTimeout: 20 * time.Second,
 	}
 
 	// Publishing the server is non-fatal: a local-only run is still useful.
@@ -988,7 +991,9 @@ func prefixNotice(result *mcp.CallToolResult, ws *workspace.Workspace) *mcp.Call
 func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		stopWatchdog := warnWhenSlow(r.Method, r.URL.Path)
 		next.ServeHTTP(w, r)
+		stopWatchdog()
 
 		path := r.URL.Path
 		if !s.cfg.Logging.Requests {
@@ -1013,6 +1018,24 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 			Dur("duration_ms", time.Since(start)).
 			Msg("http_request")
 	})
+}
+
+// slowRequestAfter is how long a request may run before the server says so.
+var slowRequestAfter = 10 * time.Second
+
+// warnWhenSlow logs once if a request is still running after slowRequestAfter,
+// and returns a function that cancels the warning when the request finishes. A
+// request that hangs never reaches the completion log, so without this a
+// stalled call leaves no trace at all.
+func warnWhenSlow(method, path string) func() {
+	timer := time.AfterFunc(slowRequestAfter, func() {
+		log.Warn().
+			Str("method", method).
+			Str("path", path).
+			Dur("running_ms", slowRequestAfter).
+			Msg("http_request_slow")
+	})
+	return func() { timer.Stop() }
 }
 
 // isDiscoveryRequest reports whether a request is a client probe rather than
