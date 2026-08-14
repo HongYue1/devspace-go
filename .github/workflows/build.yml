@@ -1,0 +1,119 @@
+name: build
+
+on:
+  push:
+    branches: ["main", "feat/**", "fix/**", "ci/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Fyne needs OpenGL and X11 headers to compile the GUI on Linux.
+      - name: Install GUI build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev xorg-dev libxkbcommon-dev
+
+      # Checked on Linux only: a Windows checkout may convert line endings,
+      # which gofmt reports as a formatting difference.
+      - name: gofmt
+        if: runner.os == 'Linux'
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            gofmt -d .
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./... -count=1
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: test
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-amd64
+            runs-on: windows-latest
+            ext: ".exe"
+          - target: linux-amd64
+            runs-on: ubuntu-latest
+            ext: ""
+          - target: macos-amd64
+            runs-on: macos-13
+            ext: ""
+          - target: macos-arm64
+            runs-on: macos-latest
+            ext: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install GUI build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev xorg-dev libxkbcommon-dev
+
+      # Built natively per platform, because the Fyne GUI cannot be cross compiled.
+      - name: Build server
+        run: |
+          mkdir -p dist
+          go build -trimpath -o "dist/mcp-webcoder${{ matrix.ext }}" ./cmd/devspace/
+
+      - name: Build GUI configurator
+        run: go build -trimpath -o "dist/mcp-webcoder-gui${{ matrix.ext }}" ./cmd/devspace-gui/
+
+      - name: Bundle portable tools
+        run: |
+          if [ -f "tools/cloudflared.exe" ] && [ "${{ matrix.target }}" = "windows-amd64" ]; then
+            mkdir -p dist/tools
+            cp tools/cloudflared.exe dist/tools/cloudflared.exe
+          fi
+
+      - name: List artifacts
+        run: ls -lh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcp-webcoder-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
