@@ -422,27 +422,33 @@ func GrepFiles(ctx context.Context, req *mcp.CallToolRequest, input GrepInput, w
 	skipped := 0
 	start := time.Now()
 
-	_ = filepath.Walk(searchPath, func(path string, info os.FileInfo, err error) error {
+	// WalkDir avoids one stat syscall per entry, which matters on large trees,
+	// and shares the walk budget with glob instead of keeping its own copy.
+	_ = filepath.WalkDir(searchPath, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if time.Since(start) > 20*time.Second || matches >= maxSearchMatches {
+		if time.Since(start) > searchWalkTimeout || matches >= maxSearchMatches {
 			return filepath.SkipAll
 		}
-		if info.IsDir() {
-			if skippedDirs[info.Name()] {
+		if entry.IsDir() {
+			if skippedDirs[entry.Name()] {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		if include != "" {
-			ok, _ := filepath.Match(include, info.Name())
+			ok, _ := filepath.Match(include, entry.Name())
 			if !ok {
 				return nil
 			}
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil
 		}
 		if info.Size() > maxSearchFileBytes || looksBinaryPath(path) {
 			skipped++
