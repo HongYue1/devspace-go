@@ -19,21 +19,6 @@ MCP WebCoder is a self-hosted MCP server that lets AI assistants read, edit, sea
 - [Platform Support](#platform-support)
 - [Project Structure](#project-structure)
 
-### 🌍 Translations
-
-| Language | | Language | | Language | |
-|---|---|---|---|---|---|
-| [Afrikaans](readme/af.md) | [العربية](readme/ar.md) | [Български](readme/bg.md) | [বাংলা](readme/bn.md) | [Català](readme/ca.md) |
-| [Čeština](readme/cs.md) | [Dansk](readme/da.md) | [Deutsch](readme/de.md) | [Ελληνικά](readme/el.md) | [English](readme/en.md) |
-| [Español](readme/es.md) | [Eesti](readme/et.md) | [فارسی](readme/fa.md) | [Suomi](readme/fi.md) | [Français](readme/fr.md) |
-| [Gaeilge](readme/ga.md) | [עברית](readme/he.md) | [हिन्दी](readme/hi.md) | [Hrvatski](readme/hr.md) | [Magyar](readme/hu.md) |
-| [Indonesia](readme/id.md) | [Italiano](readme/it.md) | [日本語](readme/ja.md) | [한국어](readme/ko.md) | [Lietuvių](readme/lt.md) |
-| [Latviešu](readme/lv.md) | [Melayu](readme/ms.md) | [Malti](readme/mt.md) | [Nederlands](readme/nl.md) | [Norsk](readme/no.md) |
-| [Polski](readme/pl.md) | [Português](readme/pt.md) | [Română](readme/ro.md) | [Русский](readme/ru.md) | [Slovenčina](readme/sk.md) |
-| [Slovenščina](readme/sl.md) | [Српски](readme/sr.md) | [Svenska](readme/sv.md) | [Kiswahili](readme/sw.md) | [தமிழ்](readme/ta.md) |
-| [ไทย](readme/th.md) | [Türkçe](readme/tr.md) | [Українська](readme/uk.md) | [اردو](readme/ur.md) | [Tiếng Việt](readme/vi.md) |
-| [简体中文](readme/zh.md) | [isiZulu](readme/zu.md) |
-
 ---
 
 ## Quick Start
@@ -285,7 +270,6 @@ mcp-webcoder/
 │   ├── windows/            ← PowerShell build script
 │   ├── unix/               ← Bash + Makefile build scripts
 │   └── userscripts/        ← Tampermonkey auto-approve script
-├── readme/                 ← Translations of this file (47 languages)
 ├── tools/                  ← cloudflared.exe
 ├── go.mod / go.sum
 └── README.md
