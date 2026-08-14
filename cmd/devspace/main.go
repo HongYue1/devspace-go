@@ -10,6 +10,7 @@ import (
 	"github.com/snakex21/devspace-go/internal/server"
 	"github.com/snakex21/devspace-go/internal/shells"
 	"github.com/snakex21/devspace-go/internal/tools"
+	"github.com/snakex21/devspace-go/internal/version"
 )
 
 func main() {
@@ -26,6 +27,8 @@ func main() {
 			os.Exit(runConfig(os.Args[2:], os.Stdin, os.Stdout))
 		case "tunnel":
 			os.Exit(runTunnel(os.Args[2:], os.Stdout))
+		case "version", "--version", "-v":
+			fmt.Println(version.String())
 		case "help", "--help", "-h":
 			printHelp()
 		default:
@@ -139,6 +142,7 @@ Commands:
   tunnel      Set up the Cloudflare tunnel the server runs
   doctor      Diagnostic checks
   init        Same as config, kept for older instructions
+  version     Print the version of this build
   help        Show this help
 
 Configuration:
