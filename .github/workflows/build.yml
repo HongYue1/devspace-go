@@ -53,27 +53,33 @@ jobs:
       - name: go test
         run: go test ./... -count=1
 
+  # Every target is cross-compiled on Linux. The code is pure Go with cgo off,
+  # so a runner per platform bought only queue time and a standing dependency on
+  # macOS image labels staying current. Native compilation is still covered by
+  # the test job, which runs on all three operating systems.
   build:
     name: build ${{ matrix.target }}
     needs: test
-    runs-on: ${{ matrix.runs-on }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: windows-amd64
-            runs-on: windows-latest
+            goos: windows
+            goarch: amd64
             ext: ".exe"
           - target: linux-amd64
-            runs-on: ubuntu-latest
+            goos: linux
+            goarch: amd64
             ext: ""
-          # macos-13 was retired in December 2025, so that label never gets a
-          # runner. macos-15-intel is the replacement x86_64 image.
           - target: macos-amd64
-            runs-on: macos-15-intel
+            goos: darwin
+            goarch: amd64
             ext: ""
           - target: macos-arm64
-            runs-on: macos-latest
+            goos: darwin
+            goarch: arm64
             ext: ""
     steps:
       - uses: actions/checkout@v4
@@ -83,9 +89,13 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # Built natively per platform so each artifact matches its runner. A tag
-      # build stamps its own name into the binary; every other build says dev.
+      # A tag build stamps its own name into the binary; every other build says
+      # dev.
       - name: Build server
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
         run: |
           mkdir -p dist
           version="dev"
