@@ -137,7 +137,10 @@ func parseRoots(value string) ([]string, error) {
 		}
 		info, err := os.Stat(abs)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", abs, err)
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("cannot find %s", abs)
+			}
+			return nil, fmt.Errorf("cannot read %s: %w", abs, err)
 		}
 		if !info.IsDir() {
 			return nil, fmt.Errorf("%s is a file, not a folder", abs)

@@ -382,3 +382,23 @@ func TestStoredConfigIgnoresAByteOrderMark(t *testing.T) {
 		t.Fatalf("port is %d, want 8222", cfg.Port)
 	}
 }
+
+// os.Stat already names the path in its error, so wrapping it with the path
+// printed the folder twice.
+func TestSetNamesAMissingFolderOnce(t *testing.T) {
+	useTempConfig(t)
+	missing := filepath.Join(t.TempDir(), "not-here")
+
+	var out strings.Builder
+	if code := runConfig([]string{"set", "roots", missing}, strings.NewReader(""), &out); code == 0 {
+		t.Fatal("a missing folder was accepted")
+	}
+
+	text := out.String()
+	if !strings.Contains(text, "cannot find") {
+		t.Errorf("the refusal does not say what went wrong:\n%s", text)
+	}
+	if count := strings.Count(text, missing); count != 1 {
+		t.Errorf("the folder is named %d times, want once:\n%s", count, text)
+	}
+}
