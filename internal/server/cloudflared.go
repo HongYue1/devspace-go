@@ -8,11 +8,11 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/snakex21/devspace-go/internal/locales"
+	"github.com/snakex21/devspace-go/internal/tunnel"
 )
 
 // namedTunnelTimeout is how long cloudflared gets to register a connection. A
@@ -24,11 +24,6 @@ const namedTunnelTimeout = 45 * time.Second
 // connection. There is nothing else to wait for: the hostname was routed to the
 // tunnel when it was created, not now.
 const namedTunnelReady = "Registered tunnel connection"
-
-// cloudflaredIngressKey is the config-file key that makes cloudflared refuse
-// --url. A config file it loads on its own therefore decides which port is
-// published, which is the one failure that looks unrelated to its cause.
-const cloudflaredIngressKey = "ingress:"
 
 // startNamedCloudflared runs a tunnel the Cloudflare account already owns.
 //
@@ -139,38 +134,14 @@ func namedTunnelArgs(host string, port int, name, credentials string) []string {
 	return append(args, name)
 }
 
-// cloudflaredConfigCandidates lists the config files cloudflared loads by
-// itself, in the order it looks for them.
+// These two live in internal/tunnel, where the setup command uses them as well,
+// so a warning here and a warning there always name the same file.
 func cloudflaredConfigCandidates() []string {
-	if explicit := strings.TrimSpace(os.Getenv("TUNNEL_CONFIG")); explicit != "" {
-		return []string{explicit}
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
-	return []string{
-		filepath.Join(home, ".cloudflared", "config.yml"),
-		filepath.Join(home, ".cloudflared", "config.yaml"),
-	}
+	return tunnel.CloudflaredConfigCandidates()
 }
 
-// configFileWithIngress reports the first candidate that defines ingress rules,
-// so the reason cloudflared is about to refuse --url can be named before it
-// does. A commented-out section does not count.
 func configFileWithIngress(candidates []string) string {
-	for _, path := range candidates {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		for _, line := range strings.Split(string(data), "\n") {
-			if strings.HasPrefix(strings.TrimSpace(line), cloudflaredIngressKey) {
-				return path
-			}
-		}
-	}
-	return ""
+	return tunnel.ConfigFileWithIngress(candidates)
 }
 
 // isRoutableTunnelURL reports whether a configured publicUrl can front a tunnel.

@@ -24,6 +24,8 @@ func main() {
 			runDoctor()
 		case "config":
 			os.Exit(runConfig(os.Args[2:], os.Stdin, os.Stdout))
+		case "tunnel":
+			os.Exit(runTunnel(os.Args[2:], os.Stdout))
 		case "help", "--help", "-h":
 			printHelp()
 		default:
@@ -134,6 +136,7 @@ Usage:
 Commands:
   serve       Start the MCP server (default)
   config      Configure interactively, or with get and set
+  tunnel      Set up the Cloudflare tunnel the server runs
   doctor      Diagnostic checks
   init        Same as config, kept for older instructions
   help        Show this help
@@ -144,6 +147,9 @@ Configuration:
   mcp-webcoder config set <key> <value>  Change one setting
   mcp-webcoder config path               Print the config file location
   mcp-webcoder config token              Print the bearer token, or add new to replace it
+
+Tunnel:
+  mcp-webcoder tunnel setup <hostname>   Create or reuse a tunnel for a hostname
 
 Environment:
   WEBCODER_ALLOWED_ROOTS       Comma-separated folders the tools may use.

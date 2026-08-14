@@ -204,6 +204,45 @@ func isConnectorEntry(name string) bool {
 	return base == "cloudflared" || base == "cloudflared.exe"
 }
 
+// cloudflaredIngressKey is the config-file key that makes cloudflared refuse
+// --url. A config file it loads on its own therefore decides which port is
+// published, which is the one failure that looks unrelated to its cause.
+const cloudflaredIngressKey = "ingress:"
+
+// CloudflaredConfigCandidates lists the config files cloudflared loads by
+// itself, in the order it looks for them.
+func CloudflaredConfigCandidates() []string {
+	if explicit := strings.TrimSpace(os.Getenv("TUNNEL_CONFIG")); explicit != "" {
+		return []string{explicit}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	return []string{
+		filepath.Join(home, ".cloudflared", "config.yml"),
+		filepath.Join(home, ".cloudflared", "config.yaml"),
+	}
+}
+
+// ConfigFileWithIngress reports the first candidate that defines ingress rules,
+// so the reason cloudflared is about to refuse --url can be named before it
+// does. A commented-out section does not count.
+func ConfigFileWithIngress(candidates []string) string {
+	for _, path := range candidates {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), cloudflaredIngressKey) {
+				return path
+			}
+		}
+	}
+	return ""
+}
+
 // isExecutableMagic reports whether the bytes start like a program: PE for
 // Windows, ELF for Linux, Mach-O or a universal binary for macOS.
 func isExecutableMagic(magic []byte) bool {
