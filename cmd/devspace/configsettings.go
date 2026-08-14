@@ -21,6 +21,7 @@ type setting struct {
 	key     string
 	help    string
 	env     string
+	secret  bool
 	show    func(*config.Config) string
 	parse   func(*config.Config, string) error
 	choices func(*config.Config) []string
@@ -29,12 +30,30 @@ type setting struct {
 
 // settings lists every field the config command can read and write, in the
 // order the interactive prompt presents them.
+// display renders a value for the terminal. A secret is reported as set or not
+// set rather than printed, because this output ends up in screenshots and pasted
+// terminal sessions.
+func (s setting) display(cfg *config.Config) string {
+	value := s.show(cfg)
+	switch {
+	case !s.secret:
+		return value
+	case value == "":
+		return "(none)"
+	default:
+		return "set (hidden)"
+	}
+}
+
 func settings() []setting {
 	return []setting{
 		rootsSetting(),
 		hostSetting(),
 		portSetting(),
 		publicURLSetting(),
+		tunnelProviderSetting(),
+		tunnelDomainSetting(),
+		tunnelAuthtokenSetting(),
 		shellSetting(),
 		langSetting(),
 		toolModeSetting(),
@@ -180,6 +199,66 @@ func publicURLSetting() setting {
 			c.PublicBaseURL = strings.TrimRight(value, "/")
 			return nil
 		},
+	}
+}
+
+func tunnelProviderSetting() setting {
+	providers := config.TunnelProviders()
+	allowed := make([]string, 0, len(providers))
+	for _, provider := range providers {
+		allowed = append(allowed, string(provider))
+	}
+
+	return choiceSetting("tunnel.provider", "Which service publishes this server; ngrok is the one that can keep a URL", "WEBCODER_TUNNEL_PROVIDER",
+		allowed,
+		func(c *config.Config) string { return string(c.Tunnel.Provider) },
+		func(c *config.Config, value string) { c.Tunnel.Provider = config.TunnelProvider(value) })
+}
+
+// tunnelDomainSetting takes a reserved ngrok domain, which is the one thing that
+// makes the public URL survive a restart.
+func tunnelDomainSetting() setting {
+	return setting{
+		key:  "tunnel.domain",
+		help: "Reserved ngrok domain such as example.ngrok-free.app; blank means a random URL",
+		env:  "WEBCODER_TUNNEL_DOMAIN",
+		show: func(c *config.Config) string { return c.Tunnel.Domain },
+		parse: func(c *config.Config, value string) error {
+			domain := config.NormalizeTunnelDomain(value)
+			if domain == "" {
+				return errors.New("name a domain, or reset it to go back to a random URL")
+			}
+			if strings.ContainsAny(domain, "/ ") {
+				return fmt.Errorf("want a host name, got %q", value)
+			}
+			if !strings.Contains(domain, ".") {
+				return fmt.Errorf("want a full host name such as example.ngrok-free.app, got %q", value)
+			}
+			c.Tunnel.Domain = domain
+			return nil
+		},
+		reset: func(c *config.Config) { c.Tunnel.Domain = "" },
+	}
+}
+
+// tunnelAuthtokenSetting stores the token the ngrok agent authenticates with. It
+// is written to the config file, which is created private, and never printed.
+func tunnelAuthtokenSetting() setting {
+	return setting{
+		key:    "tunnel.authtoken",
+		help:   "ngrok authtoken from the dashboard; stored locally and never printed back",
+		env:    "WEBCODER_TUNNEL_AUTHTOKEN",
+		secret: true,
+		show:   func(c *config.Config) string { return c.Tunnel.Authtoken },
+		parse: func(c *config.Config, value string) error {
+			token := strings.TrimSpace(value)
+			if token == "" {
+				return errors.New("paste the authtoken, or reset it to remove the stored one")
+			}
+			c.Tunnel.Authtoken = token
+			return nil
+		},
+		reset: func(c *config.Config) { c.Tunnel.Authtoken = "" },
 	}
 }
 

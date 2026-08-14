@@ -96,7 +96,7 @@ func printWizardMenu(cfg *config.Config, all []setting, out io.Writer) {
 	}
 	fmt.Fprintln(out)
 	for i, s := range all {
-		fmt.Fprintf(out, "%2d. %-*s  %s\n", i+1, width, s.key, s.show(cfg))
+		fmt.Fprintf(out, "%2d. %-*s  %s\n", i+1, width, s.key, s.display(cfg))
 	}
 	if shadows := envShadows(); len(shadows) > 0 {
 		fmt.Fprintln(out, "Overridden by the environment for this session:")
@@ -111,7 +111,7 @@ func printWizardMenu(cfg *config.Config, all []setting, out io.Writer) {
 func editSetting(cfg *config.Config, s setting, reader *bufio.Reader, out io.Writer) bool {
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "%s: %s\n", s.key, s.help)
-	fmt.Fprintf(out, "Current: %s\n", s.show(cfg))
+	fmt.Fprintf(out, "Current: %s\n", s.display(cfg))
 	if s.choices != nil {
 		fmt.Fprintf(out, "Options: %s\n", describeChoices(s.choices(cfg)))
 	}
@@ -128,7 +128,7 @@ func editSetting(cfg *config.Config, s setting, reader *bufio.Reader, out io.Wri
 			fmt.Fprintf(out, "  %v\n", err)
 			continue
 		}
-		fmt.Fprintf(out, "  %s = %s\n", s.key, s.show(cfg))
+		fmt.Fprintf(out, "  %s = %s\n", s.key, s.display(cfg))
 		return true
 	}
 }

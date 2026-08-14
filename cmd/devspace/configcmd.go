@@ -61,7 +61,7 @@ func runConfigGet(args []string, out io.Writer) int {
 	if !ok {
 		return reportUnknownKey(args[0], out)
 	}
-	fmt.Fprintln(out, s.show(cfg))
+	fmt.Fprintln(out, s.display(cfg))
 	return 0
 }
 
@@ -85,7 +85,7 @@ func runConfigSet(args []string, out io.Writer) int {
 		fmt.Fprintf(out, "Cannot save: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(out, "%s = %s\n", s.key, s.show(cfg))
+	fmt.Fprintf(out, "%s = %s\n", s.key, s.display(cfg))
 	fmt.Fprintf(out, "Saved %s\n", configFilePath(cfg))
 	warnIfShadowed(s, out)
 	return 0
@@ -112,7 +112,7 @@ func runConfigUnset(args []string, out io.Writer) int {
 		fmt.Fprintf(out, "Cannot save: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(out, "%s = %s (default)\n", s.key, s.show(cfg))
+	fmt.Fprintf(out, "%s = %s (default)\n", s.key, s.display(cfg))
 	fmt.Fprintf(out, "Saved %s\n", configFilePath(cfg))
 	warnIfShadowed(s, out)
 	return 0
@@ -198,7 +198,7 @@ func printConfigTable(cfg *config.Config, out io.Writer) {
 	}
 	fmt.Fprintf(out, "%-*s  %s\n", width, "file", configFilePath(cfg))
 	for _, s := range all {
-		fmt.Fprintf(out, "%-*s  %s\n", width, s.key, s.show(cfg))
+		fmt.Fprintf(out, "%-*s  %s\n", width, s.key, s.display(cfg))
 	}
 	if shadows := envShadows(); len(shadows) > 0 {
 		fmt.Fprintln(out)
