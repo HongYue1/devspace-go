@@ -23,6 +23,7 @@ import (
 	"github.com/snakex21/devspace-go/internal/logger"
 	"github.com/snakex21/devspace-go/internal/store"
 	"github.com/snakex21/devspace-go/internal/tools"
+	"github.com/snakex21/devspace-go/internal/version"
 	"github.com/snakex21/devspace-go/internal/workspace"
 )
 
@@ -549,7 +550,7 @@ func printTunnelURL(url string) {
 // createMcpServer creates a new MCP server with all tools registered.
 func (s *Server) createMcpServer() *mcp.Server {
 	mcpServer := mcp.NewServer(
-		&mcp.Implementation{Name: "mcp-webcoder", Version: "0.1.0"},
+		&mcp.Implementation{Name: "mcp-webcoder", Version: version.String()},
 		&mcp.ServerOptions{
 			Instructions: s.serverInstructions(),
 		},

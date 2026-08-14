@@ -82,11 +82,18 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # Built natively per platform so each artifact matches its runner.
+      # Built natively per platform so each artifact matches its runner. A tag
+      # build stamps its own name into the binary; every other build says dev.
       - name: Build server
         run: |
           mkdir -p dist
-          go build -trimpath -o "dist/mcp-webcoder${{ matrix.ext }}" ./cmd/devspace/
+          version="dev"
+          case "${{ github.ref }}" in
+            refs/tags/*) version="${{ github.ref_name }}" ;;
+          esac
+          go build -trimpath \
+            -ldflags "-X github.com/snakex21/devspace-go/internal/version.Version=${version}" \
+            -o "dist/mcp-webcoder${{ matrix.ext }}" ./cmd/devspace/
 
       - name: Bundle portable tools
         run: |
