@@ -108,8 +108,8 @@ func DefaultConfig() *Config {
 		AllowedHosts:  []string{"*"},
 		Logging: LoggingConfig{
 			Level:         LogInfo,
-			Format:        LogJSON,
-			Requests:      true,
+			Format:        LogText,
+			Requests:      false,
 			Assets:        false,
 			ToolCalls:     true,
 			ShellCommands: false,
@@ -179,8 +179,8 @@ func LoadConfig() *Config {
 	if v := os.Getenv("WEBCODER_LOG_FORMAT"); v != "" {
 		cfg.Logging.Format = LogFormat(v)
 	}
-	if v := os.Getenv("WEBCODER_LOG_REQUESTS"); v == "0" {
-		cfg.Logging.Requests = false
+	if v := os.Getenv("WEBCODER_LOG_REQUESTS"); v != "" {
+		cfg.Logging.Requests = v != "0"
 	}
 	if v := os.Getenv("WEBCODER_LOG_ASSETS"); v == "1" {
 		cfg.Logging.Assets = true
