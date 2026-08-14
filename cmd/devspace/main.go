@@ -62,11 +62,9 @@ func runServer() {
 }
 
 func runServerWithConfig(cfg *config.Config) {
-	// Initialize locale system
+	// Initialize locale system. An empty or unknown language falls back to
+	// English inside SetLocale, so there is nothing to special-case here.
 	locales.Init(cfg.Lang)
-	if cfg.Lang == "" {
-		locales.Init("pl")
-	}
 
 	srv, err := server.New(cfg)
 	if err != nil {
