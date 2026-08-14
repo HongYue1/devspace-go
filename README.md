@@ -56,7 +56,7 @@ mcp-webcoder config set port 7676  # Or change one setting
 mcp-webcoder                  # Starts server. Auto-detects config.
 ```
 
-This also auto-starts a Cloudflare Tunnel if `cloudflared` is found in `tools/`.
+This also starts a tunnel: ngrok when a domain or authtoken is configured, otherwise Cloudflare from `tools/`.
 
 ### 4. Connect your MCP client
 ```
@@ -115,7 +115,12 @@ All config lives **in the same folder as the executable** (portable):
   "shell": "auto",
   "lang": "auto",
   "toolMode": "full",
-  "toolNaming": "short"
+  "toolNaming": "short",
+  "tunnel": {
+    "provider": "auto",
+    "domain": "",
+    "authtoken": ""
+  }
 }
 ```
 
@@ -125,6 +130,9 @@ All config lives **in the same folder as the executable** (portable):
 | `lang` | `auto` | Auto-detect from OS. Supports 47 languages |
 | `toolMode` | `full` | `full` (all tools) or `minimal` (shell only for search) |
 | `toolNaming` | `short` | `short` (read, write) or `legacy` (read_file, write_file) |
+| `tunnel.provider` | `auto` | `auto`, `ngrok`, `cloudflared`, `pinggy`, `off` |
+| `tunnel.domain` | — | Reserved ngrok domain, so the URL survives a restart |
+| `tunnel.authtoken` | — | ngrok authtoken. `NGROK_AUTHTOKEN` is honoured too |
 
 No environment variables needed — everything is in the portable config file.
 
@@ -132,14 +140,28 @@ No environment variables needed — everything is in the portable config file.
 
 ## Tunnel (Remote Access)
 
-For ChatGPT web version (HTTPS required), MCP WebCoder auto-starts a tunnel:
+Web clients need HTTPS, so MCP WebCoder publishes itself through a tunnel:
 
-| Tunnel | URL type | Setup |
+| Tunnel | URL | Setup |
 |---|---|---|
-| **Cloudflare** | Random (auto) | `cloudflared.exe` included in `tools/` |
-| **Pinggy** | Stable | Needs SSH key (`ssh-keygen`) |
+| **ngrok** | Stable, with a reserved domain | Free account; the agent is fetched into `tools/` on first use |
+| **Cloudflare** | New URL every session | `cloudflared.exe` included in `tools/` |
+| **Pinggy** | New URL every session | Needs `ssh` on PATH |
 
-Server auto-detects which one is available. Restart the server for a new Cloudflare URL, or use Pinggy for a permanent URL.
+On `auto`, ngrok goes first when a domain or authtoken is configured, otherwise Cloudflare. Name a provider to skip the rest, or set `off` to stay local.
+
+### A URL that survives a restart
+
+Reserve the free domain at [dashboard.ngrok.com/domains](https://dashboard.ngrok.com/domains), copy the token from [your authtoken page](https://dashboard.ngrok.com/get-started/your-authtoken), then:
+
+```bash
+mcp-webcoder config set tunnel.domain example.ngrok-free.app
+mcp-webcoder config set tunnel.authtoken YOUR_TOKEN
+```
+
+The MCP URL is then `https://example.ngrok-free.app/mcp` every time. The token is stored in the config file and never printed back — `config get tunnel.authtoken` reports `set (hidden)`. A domain pasted as a full link works too.
+
+Browsers opening the URL see ngrok's one-time interstitial page; MCP clients send JSON and pass straight through.
 
 ---
 
