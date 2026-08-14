@@ -1,8 +1,8 @@
-# Binaries (only in root)
+# Binaries and downloaded connectors
 /mcp-webcoder
 /devspace
 *.exe
-!tools/cloudflared.exe
+tools/
 
 # Build output
 build/

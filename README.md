@@ -270,7 +270,7 @@ mcp-webcoder/
 │   ├── windows/            ← PowerShell build script
 │   ├── unix/               ← Bash + Makefile build scripts
 │   └── userscripts/        ← Tampermonkey auto-approve script
-├── tools/                  ← cloudflared.exe
+├── tools/                  ← Connectors downloaded at runtime, not committed
 ├── go.mod / go.sum
 └── README.md
 ```

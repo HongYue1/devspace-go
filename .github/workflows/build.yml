@@ -106,13 +106,6 @@ jobs:
             -ldflags "-X github.com/snakex21/devspace-go/internal/version.Version=${version}" \
             -o "dist/mcp-webcoder${{ matrix.ext }}" ./cmd/devspace/
 
-      - name: Bundle portable tools
-        run: |
-          if [ -f "tools/cloudflared.exe" ] && [ "${{ matrix.target }}" = "windows-amd64" ]; then
-            mkdir -p dist/tools
-            cp tools/cloudflared.exe dist/tools/cloudflared.exe
-          fi
-
       - name: List artifacts
         run: ls -lh dist
 
