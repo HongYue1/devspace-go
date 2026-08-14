@@ -128,6 +128,7 @@ func normalizeTimeout(requested int) int {
 // before it was stopped, which is usually the interesting part.
 func timeoutReport(output string, timeoutSec int) string {
 	report := fmt.Sprintf("Command timed out after %ds; its process tree was terminated.", timeoutSec)
+	report += "\nIf it needs longer, run it again with background set to true and read it with job_status."
 	if strings.TrimSpace(output) == "" {
 		return report + "\n(no output before the timeout)"
 	}

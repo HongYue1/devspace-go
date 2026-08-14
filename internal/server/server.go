@@ -813,6 +813,38 @@ func (s *Server) registerTools(server *mcp.Server) {
 		},
 	)
 
+	// remove
+	mcp.AddTool(server,
+		&mcp.Tool{
+			Name:        names.Remove,
+			Description: fmt.Sprintf("Delete a file or directory inside an open workspace. Pass recursive for a directory that is not empty, and dryRun to see what would go before it goes. Use this instead of shell rm/Remove-Item so deletes stay inside the workspace root; the root itself and .git directories are refused. Prefer %s when the intent is to relocate something rather than lose it. Call open_workspace first and pass workspaceId.", names.Move),
+			Annotations: &mcp.ToolAnnotations{
+				ReadOnlyHint:    false,
+				DestructiveHint: boolPtr(true),
+				IdempotentHint:  false,
+				OpenWorldHint:   boolPtr(false),
+			},
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, input tools.RemoveInput) (*mcp.CallToolResult, tools.RemoveOutput, error) {
+			ws, err := s.registry.GetWorkspace(input.WorkspaceID)
+			if err != nil {
+				result := &mcp.CallToolResult{}
+				result.SetError(err)
+				return result, tools.RemoveOutput{}, nil
+			}
+
+			_, err = s.registry.ResolvePath(ws, input.Path)
+			if err != nil {
+				result := &mcp.CallToolResult{}
+				result.SetError(err)
+				return result, tools.RemoveOutput{}, nil
+			}
+
+			res, out, err := tools.RemovePath(ctx, req, input, ws.Root)
+			return prefixNotice(res, ws), out, err
+		},
+	)
+
 	// edit
 	mcp.AddTool(server,
 		&mcp.Tool{
@@ -906,13 +938,13 @@ func (s *Server) registerTools(server *mcp.Server) {
 	// bash (the shell that was configured, or the best one detected)
 	shellHint := tools.ShellHint()
 	bashDesc := fmt.Sprintf(
-		"Run a shell command inside an open workspace. %s Commands time out after 30 seconds by default and 300 at most, and on timeout the whole process tree is terminated, so do not start servers or watchers meant to keep running. Use only for tests, builds, git inspection, and commands that are better executed by the shell. Do not use %s to create, move, rename, or modify files. Prefer %s for file inspection, %s for creating directories, %s for moves/renames, and %s/%s for file changes. Call open_workspace first and pass workspaceId.",
-		shellHint, names.Bash, names.Read, names.Mkdir, names.Move, names.Edit, names.Write,
+		"Run a shell command inside an open workspace. %s A foreground command times out after 30 seconds by default; asking for more than 120 starts a background job instead, because a request that long is abandoned by the client before it can answer. On timeout the whole process tree is terminated. Set background to true for servers, watchers, long builds, and long test runs: it returns a jobId at once, job_status streams the output and can wait for the end, and job_kill stops it. Use only for tests, builds, git inspection, and commands that are better executed by the shell. Do not use %s to create, move, rename, modify, or delete files. Prefer %s for file inspection, %s for creating directories, %s for moves/renames, %s for deletes, and %s/%s for file changes. Call open_workspace first and pass workspaceId.",
+		shellHint, names.Bash, names.Read, names.Mkdir, names.Move, names.Remove, names.Edit, names.Write,
 	)
 	if s.cfg.ToolMode == config.ToolModeMinimal {
 		bashDesc = fmt.Sprintf(
-			"Run a shell command inside an open workspace. %s Commands time out after 30 seconds by default and 300 at most, and on timeout the whole process tree is terminated. In minimal tool mode, %s, %s, and %s are disabled; use shell commands for search and directory inspection. Do not use %s to create or modify files. Prefer %s for direct file reads. Call open_workspace first and pass workspaceId.",
-			shellHint, names.Grep, names.Glob, names.Ls, names.Bash, names.Read,
+			"Run a shell command inside an open workspace. %s A foreground command times out after 30 seconds by default; asking for more than 120 starts a background job instead, and job_status then streams its output. On timeout the whole process tree is terminated. In minimal tool mode, %s, %s, and %s are disabled; use shell commands for search and directory inspection. Do not use %s to create, modify, or delete files. Prefer %s for direct file reads and %s for deletes. Call open_workspace first and pass workspaceId.",
+			shellHint, names.Grep, names.Glob, names.Ls, names.Bash, names.Read, names.Remove,
 		)
 	}
 
@@ -936,45 +968,127 @@ func (s *Server) registerTools(server *mcp.Server) {
 			return prefixNotice(res, ws), out, err
 		},
 	)
+
+	// job_status, job_kill and job_list are the read and stop side of a
+	// background command. They take a jobId rather than a workspaceId, so a
+	// reconnecting client can still reach a job it started earlier.
+	mcp.AddTool(server,
+		&mcp.Tool{
+			Name:        "job_status",
+			Description: fmt.Sprintf("Report a background job started by %s and stream its output. Pass the nextLine from the previous answer as sinceLine to read only what is new, and set wait to block up to 25 seconds for the job to finish instead of sleeping in a shell command.", names.Bash),
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
+		},
+		tools.JobStatus,
+	)
+
+	mcp.AddTool(server,
+		&mcp.Tool{
+			Name:        "job_kill",
+			Description: "Stop a background job and every process it started. Stopping a job that already finished is reported, not an error.",
+			Annotations: &mcp.ToolAnnotations{
+				ReadOnlyHint:    false,
+				DestructiveHint: boolPtr(true),
+				IdempotentHint:  true,
+				OpenWorldHint:   boolPtr(false),
+			},
+		},
+		tools.JobKill,
+	)
+
+	mcp.AddTool(server,
+		&mcp.Tool{
+			Name:        "job_list",
+			Description: "List the background jobs this server is tracking, newest first, with their state and how much output each has produced.",
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
+		},
+		tools.JobList,
+	)
+
+	// list_roots
+	mcp.AddTool(server,
+		&mcp.Tool{
+			Name:        "list_roots",
+			Description: "List the project roots this server allows, with the git branch of each. Call this when you do not already know which folder to open, instead of guessing paths or hunting for the project with directory listings.",
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, input ListRootsInput) (*mcp.CallToolResult, ListRootsOutput, error) {
+			roots := workspace.DescribeRoots(s.registry.AllowedRoots(), s.registry.DefaultRoot())
+
+			lines := make([]string, 0, len(roots)+1)
+			for _, root := range roots {
+				var details []string
+				if root.IsDefault {
+					details = append(details, "default")
+				}
+				if !root.Exists {
+					details = append(details, "missing")
+				}
+				switch {
+				case root.IsGitRepo && root.Branch != "":
+					details = append(details, "git "+root.Branch)
+				case root.IsGitRepo:
+					details = append(details, "git")
+				}
+
+				line := root.Path
+				if len(details) > 0 {
+					line += "  (" + strings.Join(details, ", ") + ")"
+				}
+				lines = append(lines, line)
+			}
+			lines = append(lines, "Open one of these with open_workspace, or call open_default_workspace for the default root.")
+
+			text := strings.Join(lines, "\n")
+			return &mcp.CallToolResult{
+					Content: []mcp.Content{&mcp.TextContent{Text: text}},
+				}, ListRootsOutput{
+					Roots:  roots,
+					Result: text,
+				}, nil
+		},
+	)
 }
 
 // ToolNames holds the tool naming configuration.
 type ToolNames struct {
-	Read  string
-	Write string
-	Mkdir string
-	Move  string
-	Edit  string
-	Grep  string
-	Glob  string
-	Ls    string
-	Bash  string
+	Read   string
+	Write  string
+	Mkdir  string
+	Move   string
+	Remove string
+	Edit   string
+	Grep   string
+	Glob   string
+	Ls     string
+	Bash   string
 }
 
 func (s *Server) toolNames() ToolNames {
 	if s.cfg.ToolNaming == config.NamingLegacy {
 		return ToolNames{
-			Read:  "read_file",
-			Write: "write_file",
-			Mkdir: "create_directory",
-			Move:  "move_path",
-			Edit:  "edit_file",
-			Grep:  "grep_files",
-			Glob:  "find_files",
-			Ls:    "list_directory",
-			Bash:  "run_shell",
+			Read:   "read_file",
+			Write:  "write_file",
+			Mkdir:  "create_directory",
+			Move:   "move_path",
+			Remove: "remove_path",
+			Edit:   "edit_file",
+			Grep:   "grep_files",
+			Glob:   "find_files",
+			Ls:     "list_directory",
+			Bash:   "run_shell",
 		}
 	}
 	return ToolNames{
-		Read:  "read",
-		Write: "write",
-		Mkdir: "mkdir",
-		Move:  "move",
-		Edit:  "edit",
-		Grep:  "grep",
-		Glob:  "glob",
-		Ls:    "ls",
-		Bash:  "bash",
+		Read:   "read",
+		Write:  "write",
+		Mkdir:  "mkdir",
+		Move:   "move",
+		Remove: "remove",
+		Edit:   "edit",
+		Grep:   "grep",
+		Glob:   "glob",
+		Ls:     "ls",
+		Bash:   "bash",
 	}
 }
 
@@ -991,10 +1105,10 @@ func (s *Server) serverInstructions() string {
 	agentsMd := "Follow instructions returned by open_workspace. Before working under a path listed in availableAgentsFiles, use read to inspect that instruction file and follow it. "
 
 	return fmt.Sprintf(
-		"Use MCP WebCoder as a local coding workspace. Call open_workspace once per project folder or worktree to obtain a workspaceId; if local absolute paths are blocked by the client, call open_default_workspace instead. Reuse that same workspaceId for all later file, search, edit, write, mkdir, move, and shell tools in that folder. If the workspaceId becomes stale after reconnecting, pass workspaceId 'default' or 'latest' to use the most recent/default workspace. %s%sPrefer %s for targeted modifications, %s only for new files or complete rewrites, %s for directory creation, %s for moves/renames, and %s for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create, move, rename, or modify files with %s. %s",
+		"Use MCP WebCoder as a local coding workspace. Call list_roots to see which project folders this server allows, then open_workspace once per folder or worktree to obtain a workspaceId; if local absolute paths are blocked by the client, call open_default_workspace instead. Reuse that same workspaceId for all later file, search, edit, write, mkdir, move, remove, and shell tools in that folder. If the workspaceId becomes stale after reconnecting, pass workspaceId 'default' or 'latest' to use the most recent/default workspace. %s%sPrefer %s for targeted modifications, %s only for new files or complete rewrites, %s for directory creation, %s for moves/renames, %s for deletes, and %s for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create, move, rename, modify, or delete files with %s. Anything that may outlive a single call, such as a CI watch, a long build, or a dev server, belongs in a background job: call %s with background set to true, read it with job_status, and stop it with job_kill. %s",
 		agentsMd,
 		inspection,
-		names.Edit, names.Write, names.Mkdir, names.Move, names.Bash, names.Bash, tools.ShellHint(),
+		names.Edit, names.Write, names.Mkdir, names.Move, names.Remove, names.Bash, names.Bash, names.Bash, tools.ShellHint(),
 	)
 }
 
@@ -1083,12 +1197,19 @@ func isDiscoveryRequest(method, path string) bool {
 // --- types ---
 
 type OpenWorkspaceInput struct {
-	Path    string `json:"path"`
-	Mode    string `json:"mode,omitempty"`
-	BaseRef string `json:"baseRef,omitempty"`
+	Path    string `json:"path" jsonschema:"Absolute path of the project folder to open. Pass an empty string or 'default' for the first configured root; call list_roots to see which roots this server allows."`
+	Mode    string `json:"mode,omitempty" jsonschema:"How to open the folder: 'checkout' (the default) works directly in it. 'worktree' is not implemented yet and is rejected."`
+	BaseRef string `json:"baseRef,omitempty" jsonschema:"Git ref a worktree would be created from. Ignored in checkout mode."`
 }
 
 type OpenDefaultWorkspaceInput struct{}
+
+type ListRootsInput struct{}
+
+type ListRootsOutput struct {
+	Roots  []workspace.RootInfo `json:"roots" jsonschema:"Configured roots, in the order this server accepts them."`
+	Result string               `json:"result" jsonschema:"Human readable list of the configured roots."`
+}
 
 type OpenWorkspaceOutput struct {
 	WorkspaceID          string                      `json:"workspaceId"`

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // caseInsensitiveFS reports whether path comparison should ignore case.
@@ -120,4 +121,73 @@ func WalkWorkspace(root string, visitor func(path string, info os.FileInfo) erro
 
 		return visitor(path, info)
 	})
+}
+
+// RootInfo describes one configured root. A caller that cannot see the server
+// console has no other way to learn which projects are reachable, and guessing
+// wastes calls on directories that are not allowed.
+type RootInfo struct {
+	Path         string `json:"path" jsonschema:"Absolute path of the configured root."`
+	Exists       bool   `json:"exists" jsonschema:"Whether the path exists on disk right now."`
+	IsGitRepo    bool   `json:"isGitRepo" jsonschema:"Whether the root is a git repository."`
+	Branch       string `json:"branch,omitempty" jsonschema:"Checked out branch, or a short commit id when the repository has a detached head."`
+	LastModified string `json:"lastModified,omitempty" jsonschema:"RFC 3339 timestamp of the root's own modification time."`
+	IsDefault    bool   `json:"isDefault" jsonschema:"Whether this is the root that open_default_workspace opens."`
+}
+
+// DescribeRoots inspects each configured root.
+func DescribeRoots(roots []string, defaultRoot string) []RootInfo {
+	infos := make([]RootInfo, 0, len(roots))
+	for _, root := range roots {
+		infos = append(infos, describeRoot(root, defaultRoot))
+	}
+	return infos
+}
+
+// describeRoot reads the branch straight from .git/HEAD rather than running
+// git, so listing roots stays cheap and works when git is missing.
+func describeRoot(root, defaultRoot string) RootInfo {
+	clean := filepath.Clean(root)
+	info := RootInfo{
+		Path:      clean,
+		IsDefault: pathKey(clean) == pathKey(defaultRoot),
+	}
+
+	stat, err := os.Stat(clean)
+	if err != nil {
+		return info
+	}
+	info.Exists = true
+	info.LastModified = stat.ModTime().UTC().Format(time.RFC3339)
+
+	gitPath := filepath.Join(clean, ".git")
+	if _, err := os.Stat(gitPath); err != nil {
+		return info
+	}
+	info.IsGitRepo = true
+
+	// A worktree or submodule has a .git file pointing elsewhere, so a missing
+	// HEAD here means the branch is unknown, not that this is not a repository.
+	head, err := os.ReadFile(filepath.Join(gitPath, "HEAD"))
+	if err != nil {
+		return info
+	}
+	info.Branch = branchFromHead(string(head))
+	return info
+}
+
+// branchFromHead extracts a branch name from the contents of .git/HEAD,
+// falling back to a short commit id for a detached head.
+func branchFromHead(head string) string {
+	head = strings.TrimSpace(head)
+	if rest, ok := strings.CutPrefix(head, "ref: refs/heads/"); ok {
+		return rest
+	}
+	if rest, ok := strings.CutPrefix(head, "ref: "); ok {
+		return rest
+	}
+	if len(head) > 12 {
+		return head[:12]
+	}
+	return head
 }

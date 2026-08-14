@@ -402,17 +402,32 @@ func EditFile(ctx context.Context, req *mcp.CallToolRequest, input EditInput, ws
 	}, EditOutput{Status: "applied", Result: message}, nil
 }
 
+// maxGrepContextLines caps how many lines of context one match may carry, so
+// a wide context cannot turn a small search into a whole-file dump.
+const maxGrepContextLines = 10
+
+// contextLine is a line held back as possible leading context for a match that
+// has not happened yet.
+type contextLine struct {
+	number int
+	text   string
+}
+
 // GrepInput represents the input for the grep tool.
 type GrepInput struct {
-	WorkspaceID string `json:"workspaceId" jsonschema:"Workspace identifier returned by open_workspace."`
-	Pattern     string `json:"pattern" jsonschema:"Search pattern."`
-	Path        string `json:"path,omitempty" jsonschema:"Optional path scope relative to the workspace root."`
-	Include     string `json:"include,omitempty" jsonschema:"Optional include glob."`
+	WorkspaceID     string `json:"workspaceId" jsonschema:"Workspace identifier returned by open_workspace."`
+	Pattern         string `json:"pattern" jsonschema:"Search pattern, as a Go regular expression."`
+	Path            string `json:"path,omitempty" jsonschema:"Optional path scope relative to the workspace root."`
+	Include         string `json:"include,omitempty" jsonschema:"Optional include glob matched against the file name."`
+	CaseInsensitive bool   `json:"caseInsensitive,omitempty" jsonschema:"Match without regard to case."`
+	ContextLines    int    `json:"contextLines,omitempty" jsonschema:"Lines of context to show before and after each match, up to 10. Context lines are prefixed path-line- and matches path:line:, as in grep."`
+	MaxMatches      int    `json:"maxMatches,omitempty" jsonschema:"Stop after this many matches. Defaults to 500, which is also the maximum."`
 }
 
 // GrepOutput represents the output for the grep tool.
 type GrepOutput struct {
-	Result string `json:"result" jsonschema:"Grep results."`
+	Result  string `json:"result" jsonschema:"Grep results."`
+	Matches int    `json:"matches" jsonschema:"Number of matching lines found."`
 }
 
 // GrepFiles searches file contents for a pattern.
@@ -422,11 +437,29 @@ func GrepFiles(ctx context.Context, req *mcp.CallToolRequest, input GrepInput, w
 		searchPath = filepath.Join(wsRoot, input.Path)
 	}
 
-	re, err := regexp.Compile(input.Pattern)
+	pattern := input.Pattern
+	if input.CaseInsensitive {
+		pattern = "(?i)" + pattern
+	}
+
+	re, err := regexp.Compile(pattern)
 	if err != nil {
 		result := &mcp.CallToolResult{}
 		result.SetError(fmt.Errorf("invalid regex pattern: %v", err))
 		return result, GrepOutput{}, nil
+	}
+
+	contextLines := input.ContextLines
+	if contextLines < 0 {
+		contextLines = 0
+	}
+	if contextLines > maxGrepContextLines {
+		contextLines = maxGrepContextLines
+	}
+
+	matchCap := maxSearchMatches
+	if input.MaxMatches > 0 && input.MaxMatches < matchCap {
+		matchCap = input.MaxMatches
 	}
 
 	include := input.Include
@@ -444,7 +477,7 @@ func GrepFiles(ctx context.Context, req *mcp.CallToolRequest, input GrepInput, w
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if time.Since(start) > searchWalkTimeout || matches >= maxSearchMatches {
+		if time.Since(start) > searchWalkTimeout || matches >= matchCap {
 			return filepath.SkipAll
 		}
 		if entry.IsDir() {
@@ -474,19 +507,57 @@ func GrepFiles(ctx context.Context, req *mcp.CallToolRequest, input GrepInput, w
 		}
 		defer file.Close()
 
+		rel, _ := filepath.Rel(wsRoot, path)
+		display := filepath.ToSlash(rel)
+
 		scanner := bufio.NewScanner(file)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+		// before holds candidate leading context, trailing counts the context
+		// lines still owed after a match, and lastPrinted keeps one line from
+		// being emitted twice when two matches sit close together.
+		var before []contextLine
+		trailing := 0
+		lastPrinted := 0
 		lineNo := 0
+
 		for scanner.Scan() {
 			lineNo++
 			text := scanner.Text()
-			if re.MatchString(text) {
-				rel, _ := filepath.Rel(wsRoot, path)
-				lines = append(lines, fmt.Sprintf("%s:%d:%s", filepath.ToSlash(rel), lineNo, text))
-				matches++
-				if matches >= maxSearchMatches {
-					break
+
+			switch {
+			case re.MatchString(text):
+				for _, held := range before {
+					if held.number <= lastPrinted {
+						continue
+					}
+					if lastPrinted > 0 && held.number > lastPrinted+1 {
+						lines = append(lines, "--")
+					}
+					lines = append(lines, fmt.Sprintf("%s-%d-%s", display, held.number, held.text))
+					lastPrinted = held.number
 				}
+				before = before[:0]
+
+				if contextLines > 0 && lastPrinted > 0 && lineNo > lastPrinted+1 {
+					lines = append(lines, "--")
+				}
+				lines = append(lines, fmt.Sprintf("%s:%d:%s", display, lineNo, text))
+				lastPrinted = lineNo
+				trailing = contextLines
+				matches++
+				if matches >= matchCap {
+					return nil
+				}
+			case trailing > 0:
+				lines = append(lines, fmt.Sprintf("%s-%d-%s", display, lineNo, text))
+				lastPrinted = lineNo
+				trailing--
+			case contextLines > 0:
+				if len(before) == contextLines {
+					before = before[1:]
+				}
+				before = append(before, contextLine{number: lineNo, text: text})
 			}
 		}
 		return nil
@@ -495,8 +566,8 @@ func GrepFiles(ctx context.Context, req *mcp.CallToolRequest, input GrepInput, w
 	output := strings.Join(lines, "\n")
 	if output == "" {
 		output = fmt.Sprintf("No matches found for pattern: %s", input.Pattern)
-	} else if matches >= maxSearchMatches {
-		output += fmt.Sprintf("\n\n[truncated after %d matches]", maxSearchMatches)
+	} else if matches >= matchCap {
+		output += fmt.Sprintf("\n\n[truncated after %d matches]", matchCap)
 	}
 	if skipped > 0 {
 		output += fmt.Sprintf("\n[skipped %d large/binary files]", skipped)
@@ -507,7 +578,7 @@ func GrepFiles(ctx context.Context, req *mcp.CallToolRequest, input GrepInput, w
 		Content: []mcp.Content{
 			&mcp.TextContent{Text: output},
 		},
-	}, GrepOutput{Result: output}, nil
+	}, GrepOutput{Result: output, Matches: matches}, nil
 }
 
 // GlobInput represents the input for the glob tool.
@@ -660,12 +731,15 @@ type BashInput struct {
 	WorkspaceID      string `json:"workspaceId" jsonschema:"Workspace identifier returned by open_workspace."`
 	Command          string `json:"command" jsonschema:"Shell command to run."`
 	WorkingDirectory string `json:"workingDirectory,omitempty" jsonschema:"Optional working directory relative to the workspace root."`
-	Timeout          int    `json:"timeout,omitempty" jsonschema:"Timeout in seconds. Defaults to 30, max 300. On timeout the whole process tree is terminated and whatever the command printed first is returned."`
+	Timeout          int    `json:"timeout,omitempty" jsonschema:"Timeout in seconds for a command run in the foreground. Defaults to 30. A value above 120 starts a background job instead, because a request that long is usually abandoned by the client before it can answer. On timeout the whole process tree is terminated and whatever the command printed first is returned."`
+	Background       bool   `json:"background,omitempty" jsonschema:"Start the command in the background and return a jobId immediately instead of waiting for it. Use this for watches, long builds, long test runs, and dev servers. Read its output with job_status and stop it with job_kill."`
 }
 
 // BashOutput represents the output for the bash tool.
 type BashOutput struct {
-	Result string `json:"result" jsonschema:"Shell command output."`
+	Result string `json:"result" jsonschema:"Shell command output, or the job details when the command was started in the background."`
+	JobID  string `json:"jobId,omitempty" jsonschema:"Identifier of the background job, set only when the command was started in the background."`
+	Status string `json:"status,omitempty" jsonschema:"State of the background job right after it started."`
 }
 
 // RunBash executes a shell command in the shell reported by currentShell:
@@ -677,8 +751,6 @@ func RunBash(ctx context.Context, req *mcp.CallToolRequest, input BashInput, wsR
 		cwd = filepath.Join(wsRoot, input.WorkingDirectory)
 	}
 
-	timeout := normalizeTimeout(input.Timeout)
-
 	sel := currentShell()
 	if sel.err != nil {
 		result := &mcp.CallToolResult{}
@@ -686,6 +758,15 @@ func RunBash(ctx context.Context, req *mcp.CallToolRequest, input BashInput, wsR
 		return result, BashOutput{}, nil
 	}
 
+	// A command that asks for more time than a foreground call can survive is
+	// started as a background job instead. The client abandons a request that
+	// long, and an abandoned request loses every line the command printed,
+	// which is the worst of both outcomes.
+	if input.Background || input.Timeout > maxSyncCommandTimeout {
+		return startBackgroundBash(cwd, sel, input)
+	}
+
+	timeout := normalizeTimeout(input.Timeout)
 	res := runCommand(ctx, cwd, sel.shell.Path, shellArgs(sel.shell, input.Command), timeout)
 
 	if res.timedOut {
@@ -721,6 +802,31 @@ func RunBash(ctx context.Context, req *mcp.CallToolRequest, input BashInput, wsR
 			&mcp.TextContent{Text: report},
 		},
 	}, BashOutput{Result: report}, nil
+}
+
+// startBackgroundBash hands a command to the job registry and returns at once,
+// so the caller keeps a jobId even when the command outlives the request that
+// started it.
+func startBackgroundBash(cwd string, sel shellSelection, input BashInput) (*mcp.CallToolResult, BashOutput, error) {
+	timeout := normalizeJobTimeout(input.Timeout)
+
+	j, err := backgroundJobs.start(cwd, sel.shell.Path, sel.shell.Path,
+		shellArgs(sel.shell, input.Command), input.Command, timeout)
+	if err != nil {
+		result := &mcp.CallToolResult{}
+		result.SetError(fmt.Errorf("command failed to start: %v", err))
+		return result, BashOutput{}, nil
+	}
+
+	report := fmt.Sprintf(
+		"Started %s in the background (timeout %ds).\n$ %s\nRead its output with job_status, which can wait up to %ds for it to finish. Stop it with job_kill and list jobs with job_list.",
+		j.id, timeout, input.Command, maxJobWaitSeconds)
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: report},
+		},
+	}, BashOutput{Result: report, JobID: j.id, Status: JobRunning}, nil
 }
 
 // --- helpers ---

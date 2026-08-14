@@ -152,6 +152,26 @@ func (r *Registry) OpenDefaultWorkspace() (*WorkspaceContext, error) {
 	return r.openCheckoutWorkspace(r.defaultRoot())
 }
 
+// AllowedRoots reports the roots this server accepts, so a caller can discover
+// the projects it may open instead of guessing paths.
+func (r *Registry) AllowedRoots() []string {
+	roots := make([]string, 0, len(r.cfg.AllowedRoots))
+	for _, root := range r.cfg.AllowedRoots {
+		if strings.TrimSpace(root) != "" {
+			roots = append(roots, filepath.Clean(root))
+		}
+	}
+	if len(roots) == 0 {
+		roots = append(roots, filepath.Clean(r.defaultRoot()))
+	}
+	return roots
+}
+
+// DefaultRoot reports the root that OpenDefaultWorkspace would open.
+func (r *Registry) DefaultRoot() string {
+	return filepath.Clean(r.defaultRoot())
+}
+
 func (r *Registry) defaultRoot() string {
 	if len(r.cfg.AllowedRoots) > 0 && strings.TrimSpace(r.cfg.AllowedRoots[0]) != "" {
 		return r.cfg.AllowedRoots[0]

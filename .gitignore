@@ -2,7 +2,7 @@
 /mcp-webcoder
 /devspace
 *.exe
-tools/
+/tools/
 
 # Build output
 build/
