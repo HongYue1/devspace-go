@@ -73,13 +73,31 @@ Requires **Go 1.23+** only if building from source.
 Once connected, the AI can open one of your approved project folders as a workspace:
 
 - **Read, write, and edit** files inside the workspace
-- **Create directories and move/rename files** safely inside the workspace
-- **Search code** with regex and inspect directories
-- **Run shell commands** (PowerShell on Windows, bash on Unix)
+- **Create directories, move/rename, and delete files** safely inside the workspace
+- **Search code** with regex, optional case-insensitive matching, and grep-style context lines
+- **Run shell commands** (PowerShell on Windows, bash on Unix), in the foreground or as a background job
+- **List the project roots** it may open, so it never has to guess a path
 - **Discover project instructions** from `AGENTS.md` / `CLAUDE.md`
 - **Auto-configure** with portable `.webcoder/config.json`
 
-10 MCP tools: `open_workspace`, `read`, `write`, `mkdir`, `move`, `edit`, `grep`, `glob`, `ls`, `bash`
+15 MCP tools: `list_roots`, `open_workspace`, `read`, `write`, `mkdir`, `move`, `remove`, `edit`, `grep`, `glob`, `ls`, `bash`, `job_status`, `job_kill`, `job_list`
+
+### Long-running commands
+
+A tool call has to answer while the client is still listening, so a foreground command is capped at 120 seconds. Anything longer belongs in a background job:
+
+| Step | Call |
+|---|---|
+| **Start** | `bash` with `background: true` — returns a `jobId` immediately |
+| **Follow** | `job_status` with that `jobId`; pass the previous `nextLine` as `sinceLine` to read only new output, or `wait` up to 25s for the job to end |
+| **Stop** | `job_kill` — ends the whole process tree |
+| **Review** | `job_list` — every tracked job, newest first |
+
+Asking `bash` for a timeout above 120 seconds starts a background job instead of failing halfway through a request that nobody is waiting for any more. A job keeps up to 1 MB of output in memory, drops the oldest lines when it goes past that, and reports how many it dropped — so a watch or a long build can be followed without sleeping in a shell command.
+
+### Deleting files
+
+`remove` deletes inside the workspace, so an assistant never has to reach for `rm -rf`. It refuses the workspace root and any `.git` directory, needs `recursive` for a directory that is not empty, and takes `dryRun` to report what would go before anything goes.
 
 ---
 
@@ -262,7 +280,7 @@ mcp-webcoder/
 │   ├── server/             ← HTTP + MCP + tunnel orchestration
 │   ├── shells/             ← Shell detection
 │   ├── store/              ← SQLite workspace sessions
-│   ├── tools/              ← read, write, edit, grep, glob, ls, bash
+│   ├── tools/              ← read, write, edit, grep, glob, ls, remove, bash, jobs
 │   ├── tunnel/             ← Finds and fetches ngrok / cloudflared
 │   ├── version/            ← Version stamped in at build time
 │   └── workspace/          ← Workspace & path validation
