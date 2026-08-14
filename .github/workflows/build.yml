@@ -73,8 +73,10 @@ jobs:
           - target: linux-amd64
             runs-on: ubuntu-latest
             ext: ""
+          # macos-13 was retired in December 2025, so that label never gets a
+          # runner. macos-15-intel is the replacement x86_64 image.
           - target: macos-amd64
-            runs-on: macos-13
+            runs-on: macos-15-intel
             ext: ""
           - target: macos-arm64
             runs-on: macos-latest
