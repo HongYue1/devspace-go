@@ -45,10 +45,10 @@ Pick your platform from [Releases](../../releases) or build from source:
 .\scripts\windows\build.ps1   # Windows
 ```
 
-### 2. Configure (GUI or text)
+### 2. Configure
 ```bash
-mcp-webcoder-gui              # Desktop configurator (GUI)
-mcp-webcoder init             # Text-based configurator
+mcp-webcoder config                # Interactive prompts
+mcp-webcoder config set port 7676  # Or change one setting
 ```
 
 ### 3. Run
@@ -72,10 +72,10 @@ No Node.js, no npm, no Python. Single binary.
 
 | Platform | Download |
 |---|---|
-| **Windows** | `mcp-webcoder.exe` + `mcp-webcoder-gui.exe` |
-| **Linux** | `mcp-webcoder` (GUI: compile natively) |
-| **macOS Intel** | `mcp-webcoder` (GUI: compile natively) |
-| **macOS M-chip** | `mcp-webcoder` (GUI: compile natively) |
+| **Windows** | `mcp-webcoder.exe` |
+| **Linux** | `mcp-webcoder` |
+| **macOS Intel** | `mcp-webcoder` |
+| **macOS M-chip** | `mcp-webcoder` |
 
 Requires **Go 1.23+** only if building from source.
 
@@ -151,7 +151,7 @@ Server auto-detects which one is available. Restart the server for a new Cloudfl
 | **Linux** | bash | `sh` / any shell |
 | **macOS** | bash | `sh` / `zsh` |
 
-Set `"shell"` in config.json or choose in the GUI.
+Set `"shell"` in config.json or run `mcp-webcoder config`.
 
 ---
 
@@ -177,21 +177,20 @@ make -f scripts/unix/Makefile    # Linux / Mac (make)
 
 # Build just for current platform
 go build -o mcp-webcoder ./cmd/devspace/
-go build -o mcp-webcoder-gui ./cmd/devspace-gui/
 ```
 
 ---
 
 ## Platform Support
 
-| Platform | Server | GUI |
-|---|---|---|
-| **Windows** | ✅ | ✅ |
-| **Linux** | ✅ | 🔧 (compile natively) |
-| **macOS Intel** | ✅ | 🔧 (compile natively) |
-| **macOS M-chip** | ✅ | 🔧 (compile natively) |
+| Platform | Server |
+|---|---|
+| **Windows** | ✅ |
+| **Linux** | ✅ |
+| **macOS Intel** | ✅ |
+| **macOS M-chip** | ✅ |
 
-GUI requires Fyne (OpenGL) — cannot cross-compile. Server compiles everywhere.
+Cross-compiles from any platform to any platform.
 
 ---
 
@@ -200,8 +199,7 @@ GUI requires Fyne (OpenGL) — cannot cross-compile. Server compiles everywhere.
 ```
 mcp-webcoder/
 ├── cmd/
-│   ├── devspace/           ← CLI + MCP server
-│   └── devspace-gui/       ← Desktop GUI configurator (Fyne)
+│   └── devspace/           ← CLI + MCP server
 ├── internal/
 │   ├── config/             ← Portable config system
 │   ├── locales/            ← 47 language translations
