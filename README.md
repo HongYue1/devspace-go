@@ -12,8 +12,8 @@ This fork begins at upstream [cf8b26a](https://github.com/snakex21/devspace-go/c
 
 | | Upstream at cf8b26a | This fork |
 |---|---|---|
-| **MCP tools** | 11 | 17 |
-| **Tests** | 3 test files | 37 test files, 287 test functions |
+| **MCP tools** | 11 | 18 |
+| **Tests** | 3 test files | 38 test files, 295 test functions |
 | **CI** | None | gofmt, `go vet`, and tests on Linux, Windows, and macOS; four targets cross-compiled; release assets published from `v*` tags |
 | **Authentication** | None | Bearer token required on every route except `/healthz`, with CLI commands to print and rotate it |
 | **Tunnels** | Cloudflare quick tunnel, when `cloudflared` happened to be present | ngrok reserved domains, named Cloudflare tunnels created by one command, Pinggy, or off |
@@ -21,7 +21,7 @@ This fork begins at upstream [cf8b26a](https://github.com/snakex21/devspace-go/c
 | **Language** | 51 locale files; an unrecognised system language fell back to Polish | English only |
 | **Binaries** | Server plus a separate GUI | Server only |
 
-The six tools added here are `remove`, `list_roots`, `job_status`, `job_kill`, `job_list`, and `recent_changes`. Beyond those, `bash` gained a background mode, `grep` gained `caseInsensitive`, `contextLines`, and `maxMatches`, `write` preserves a file's existing line endings instead of normalising them, and the build version is stamped into the binary and reported in the MCP handshake.
+The seven tools added here are `remove`, `list_roots`, `job_status`, `job_kill`, `job_list`, `recent_changes`, and `server_status`. Beyond those, `bash` gained a background mode, `grep` gained `caseInsensitive`, `contextLines`, and `maxMatches`, `write` preserves a file's existing line endings instead of normalising them, and the build version is stamped into the binary and reported in the MCP handshake.
 
 The most recent round of work came from a different kind of source. A long agent session was asked what had gone wrong while using this server, and the answers were implemented; they are collected under [Working with an agent's memory](#working-with-an-agents-memory). They share a theme worth stating once: an agent cannot see the file system, so a tool result is the only evidence it has, and a result that is silent about its own limits invites a confident wrong conclusion. A truncated read looks like a whole file, an empty search looks like proof of absence, a failed batch edit looks like a half-written file, and uncommitted work left by someone else looks like work the agent itself forgot.
 
@@ -108,6 +108,7 @@ A session starts by opening one of the configured roots as a workspace. Every la
 | `job_kill` | Stop a background job and every process it started |
 | `job_list` | The tracked jobs, newest first |
 | `recent_changes` | What this server process wrote, newest first, cross-checked against the repository's uncommitted files |
+| `server_status` | Whether the tunnel in front of this server is still up, with its restart count and last exit |
 
 Project instructions are part of the handshake rather than something to hunt for: `open_workspace` returns the contents of `AGENTS.md` or `CLAUDE.md` at the root, and lists any others found deeper in the tree so they can be read before touching the code they describe.
 
@@ -267,6 +268,33 @@ mcp-webcoder tunnel setup mcp.example.com webcoder
 
 One conflict is worth knowing about. If `~/.cloudflared/config.yml` exists and defines `ingress:` rules, `cloudflared` loads it and may route the hostname by that file instead of the port this server publishes. Both `tunnel setup` and `serve` name the file when they find it; renaming it lets the tunnel follow the server.
 
+### When a tunnel dies
+
+A tunnel is a child process on somebody else's network, so it does die: the machine changes IP, sleeps, or the provider drops the connection. Three things happen when it does.
+
+**The pipes keep being drained.** Output is read for the whole life of the process, not only until the public URL appears in it. A provider that keeps logging into a pipe nobody is reading eventually blocks in a write and stops forwarding traffic, which looks exactly like a dead server even though the local port is still answering. This was the likeliest cause of a tunnel that needed the whole server restarted after an IP change: an IP change is also a burst of reconnection logging.
+
+**The exit is noticed.** A tunnel that stops is replaced, with the delay doubling from two seconds up to a two-minute ceiling, and after a few failed attempts the supervisor gives up rather than spinning. If the replacement comes back on a different URL, that is printed, because a client pinned to the old one has to be repointed by hand.
+
+**The state is reported rather than guessed at.** `/healthz` now carries a `tunnel` block next to `ok`, and the `server_status` tool returns the same information plus the provider's last few lines of output:
+
+```json
+{
+  "ok": true,
+  "name": "mcp-webcoder",
+  "tunnel": {
+    "state": "up",
+    "provider": "cloudflared",
+    "url": "https://mcp.example.com",
+    "uptime": "12m",
+    "restarts": 1,
+    "lastExit": "exit status 1"
+  }
+}
+```
+
+`state` is one of `off`, `up`, `restarting`, `down`, or `stopped`. The distinction worth knowing is `down` against `stopped`: `down` means the supervisor ran out of attempts and this server has to be restarted to try again, while `stopped` means it was asked to stop and nothing is wrong. `ok: true` on its own only ever meant the local listener was alive, which stayed true while the tunnel in front of it was dead.
+
 ---
 
 ## Shells
@@ -288,7 +316,7 @@ A tunnel puts this server on the internet, which makes the token the difference 
 - **Bearer token.** With `authToken` set, every request must carry `Authorization: Bearer <token>`; only `/healthz` stays open. Without one, the server answers anybody who finds the URL.
 - **Path containment.** Every file operation is resolved and checked against the configured roots, and `remove` additionally refuses the roots themselves and `.git` directories.
 - **No third-party upload.** Files are read and written locally; nothing is sent anywhere except to the client that asked for it.
-- **Lifetime.** Stopping the server also stops the tunnel it started.
+- **Lifetime.** Stopping the server also stops the tunnel it started, including any processes the provider spawned. A tunnel that dies on its own is restarted a bounded number of times, and its state is visible in `/healthz` and `server_status`.
 
 ```bash
 mcp-webcoder config token       # print the token for pasting into a client
