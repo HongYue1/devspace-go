@@ -1,10 +1,8 @@
 package server
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -75,48 +73,33 @@ func (s *Server) startNamedCloudflared(name string) string {
 	fmt.Printf("    tunnel %s on %s\n", name, public)
 	fmt.Println()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, tunnelExe, namedTunnelArgs(s.cfg.Host, s.cfg.Port, name, credentials)...)
-
-	stdout, _ := cmd.StdoutPipe()
-	stderr, _ := cmd.StderrPipe()
-
-	if err := cmd.Start(); err != nil {
-		fmt.Printf("  warning: %s (cloudflared): %v\n", locales.T("error.cmd_failed"), err)
-		cancel()
-		return ""
-	}
-
-	ready := make(chan struct{}, 1)
-	output := newTunnelLog("cloudflared")
-
-	watch := func(stream io.Reader) {
-		scanner := bufio.NewScanner(stream)
-		for scanner.Scan() {
-			line := scanner.Text()
-			output.add(line)
+	res := s.runTunnel(tunnelSpec{
+		provider: "cloudflared",
+		detail:   "named tunnel " + name,
+		timeout:  namedTunnelTimeout,
+		build: func(ctx context.Context) *exec.Cmd {
+			return exec.CommandContext(ctx, tunnelExe, namedTunnelArgs(s.cfg.Host, s.cfg.Port, name, credentials)...)
+		},
+		// The hostname was routed when the tunnel was created, so the only
+		// thing to wait for is the edge accepting a connection. That makes the
+		// public URL known in advance, and reported the moment it is reachable.
+		match: func(line string) string {
 			if strings.Contains(line, namedTunnelReady) {
-				select {
-				case ready <- struct{}{}:
-				default:
-				}
-				return
+				return public
 			}
-		}
-	}
-	go watch(stdout)
-	go watch(stderr)
+			return ""
+		},
+	})
 
-	select {
-	case <-ready:
-		s.tunnelStop = cancel
-		printTunnelURL(public)
-		return public
-	case <-time.After(namedTunnelTimeout):
-		cancel()
-		output.report()
+	switch {
+	case res.err != nil:
+		fmt.Printf("  warning: %s (cloudflared): %v\n", locales.T("error.cmd_failed"), res.err)
+		return ""
+	case res.url == "":
+		res.output.report()
 		return ""
 	}
+	return res.url
 }
 
 // namedTunnelArgs builds the cloudflared command line.

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"net/http"
@@ -39,10 +38,24 @@ const (
 type Server struct {
 	cfg        *config.Config
 	httpServer *http.Server
-	tunnelStop context.CancelFunc
 	tunnelURL  string
 	registry   *workspace.Registry
 	store      *store.Store
+
+	// startedAt is when Start ran, so server_status can report an uptime.
+	startedAt time.Time
+
+	// tunnel is the live tunnel: its child process, the tail of its output,
+	// and the restart bookkeeping reported by /healthz and server_status.
+	tunnel tunnelSupervisor
+
+	// Restart pacing, overridden in tests so a restart can be observed without
+	// waiting seconds for it. Zero means the defaults apply, and a restartLimit
+	// of zero means keep restarting for as long as the server runs, which is
+	// what production wants from a tunnel that is down.
+	restartBase  time.Duration
+	restartMax   time.Duration
+	restartLimit int
 }
 
 // New creates a new MCP WebCoder server.
@@ -68,11 +81,10 @@ func New(cfg *config.Config) (*Server, error) {
 func (s *Server) Start() error {
 	mux := http.NewServeMux()
 
-	// Health check
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"ok":true,"name":"mcp-webcoder"}`)
-	})
+	// Health check. It reports the tunnel as well, because a live local listener
+	// never said anything about whether the published URL still reached it, and
+	// that gap let a wedged tunnel keep answering ok while nothing could get in.
+	mux.HandleFunc(healthPath, s.handleHealth)
 
 	// MCP endpoint using stateless Streamable HTTP. Workspace state is tracked
 	// separately by workspaceId, so transport sessions only add another failure
@@ -99,6 +111,7 @@ func (s *Server) Start() error {
 	}
 
 	// Publishing the server is non-fatal: a local-only run is still useful.
+	s.startedAt = time.Now()
 	s.tunnelURL = s.startTunnel()
 
 	// Graceful shutdown
@@ -115,9 +128,9 @@ func (s *Server) Start() error {
 		if err := s.httpServer.Shutdown(ctx); err != nil {
 			log.Error().Err(err).Msg("server shutdown error")
 		}
-		if s.tunnelStop != nil {
-			s.tunnelStop()
-		}
+		// Stops the provider and tells the supervisor that this exit was asked
+		// for, so it does not helpfully start a replacement mid-shutdown.
+		s.stopTunnel()
 		if s.store != nil {
 			s.store.Close()
 		}
@@ -301,6 +314,25 @@ func (t *tunnelLog) report() {
 	}
 }
 
+// tail returns the last n captured lines, oldest first.
+//
+// Unlike report, this is for answering a question rather than printing a
+// failure, so it hands the lines back instead of writing them to the console.
+func (t *tunnelLog) tail(n int) []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if n <= 0 || len(t.lines) == 0 {
+		return nil
+	}
+	if n > len(t.lines) {
+		n = len(t.lines)
+	}
+
+	out := make([]string, n)
+	copy(out, t.lines[len(t.lines)-n:])
+	return out
+}
+
 // retryCloudflared gives cloudflared a second chance, because its first attempt
 // fails often enough on a cold start to be worth the wait.
 func retryCloudflared(startCloudflared func() string) string {
@@ -377,6 +409,30 @@ func (s *Server) startTunnelWithProviders(startNgrok, startCloudflared, startPin
 	return ""
 }
 
+// pinggyArgs is the ssh command line that publishes this server through pinggy.
+//
+// ServerAliveCountMax turns a silent connection into an exit after three missed
+// probes rather than a session that hangs on forever, and ExitOnForwardFailure
+// refuses to sit there looking connected when the remote forward was never
+// granted. Both are worth having now that an exit is recoverable: the supervisor
+// starts a replacement instead of leaving a dead hostname advertised.
+//
+// There is deliberately no -N. Pinggy announces the public URL over the ssh
+// session channel, and -N asks for no session channel at all, so a tunnel
+// started that way would come up with no URL to hand back.
+func pinggyArgs(port int) []string {
+	return []string{
+		"-p", "443",
+		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "ServerAliveInterval=30",
+		"-o", "ServerAliveCountMax=3",
+		"-o", "ExitOnForwardFailure=yes",
+		"-o", "TCPKeepAlive=yes",
+		"-R", fmt.Sprintf("R0:localhost:%d", port),
+		"a.pinggy.io",
+	}
+}
+
 // startPinggy creates a tunnel via pinggy.io using SSH.
 //
 // The free service issues a new hostname every session, so this is a fallback
@@ -391,68 +447,29 @@ func (s *Server) startPinggy() string {
 	fmt.Printf("  %s\n", locales.T("tunnel.starting_pinggy"))
 	fmt.Println()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	target := fmt.Sprintf("R0:localhost:%d", s.cfg.Port)
-	cmd := exec.CommandContext(ctx, sshPath,
-		"-p", "443",
-		"-o", "StrictHostKeyChecking=accept-new",
-		"-o", "ServerAliveInterval=30",
-		"-R", target,
-		"a.pinggy.io",
-	)
-
-	stdout, _ := cmd.StdoutPipe()
-	stderrPipe, _ := cmd.StderrPipe()
-
-	if err := cmd.Start(); err != nil {
-		fmt.Printf("  warning: %s (pinggy): %v\n", locales.T("error.cmd_failed"), err)
-		cancel()
-		return ""
-	}
-
-	// Pinggy prints URL to stdout
+	// Pinggy prints the URL to stdout, but its own notices can land on either
+	// stream, so both are matched.
 	urlRegex := regexp.MustCompile(`https://[a-zA-Z0-9]+\.(a\.)?pinggy\.(link|io|xyz)`)
-	done := make(chan string, 1)
-	output := newTunnelLog("pinggy")
 
-	go func() {
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			line := scanner.Text()
-			output.add(line)
-			if match := urlRegex.FindString(line); match != "" {
-				done <- match
-				return
-			}
-		}
-	}()
+	res := s.runTunnel(tunnelSpec{
+		provider: "pinggy",
+		detail:   "a.pinggy.io",
+		timeout:  15 * time.Second,
+		build: func(ctx context.Context) *exec.Cmd {
+			return exec.CommandContext(ctx, sshPath, pinggyArgs(s.cfg.Port)...)
+		},
+		match: urlRegex.FindString,
+	})
 
-	// Also check stderr
-	go func() {
-		scanner := bufio.NewScanner(stderrPipe)
-		for scanner.Scan() {
-			line := scanner.Text()
-			output.add(line)
-			if match := urlRegex.FindString(line); match != "" {
-				select {
-				case done <- match:
-				default:
-				}
-				return
-			}
-		}
-	}()
-
-	select {
-	case url := <-done:
-		s.tunnelStop = cancel
-		printTunnelURL(url)
-		return url
-	case <-time.After(15 * time.Second):
-		cancel()
-		output.report()
+	switch {
+	case res.err != nil:
+		fmt.Printf("  warning: %s (pinggy): %v\n", locales.T("error.cmd_failed"), res.err)
+		return ""
+	case res.url == "":
+		res.output.report()
 		return ""
 	}
+	return res.url
 }
 
 // startCloudflared creates a tunnel via cloudflared.
@@ -474,57 +491,28 @@ func (s *Server) startCloudflared() string {
 	fmt.Printf("    %s\n", tunnelExe)
 	fmt.Println()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, tunnelExe, "tunnel", "--url", fmt.Sprintf("http://%s:%d", s.cfg.Host, s.cfg.Port))
-
-	stdout, _ := cmd.StdoutPipe()
-	stderrPipe, _ := cmd.StderrPipe()
-
-	if err := cmd.Start(); err != nil {
-		fmt.Printf("  warning: %s (cloudflared): %v\n", locales.T("error.cmd_failed"), err)
-		cancel()
-		return ""
-	}
-
 	urlRegex := regexp.MustCompile(`https://[a-zA-Z0-9-]+\.trycloudflare\.com`)
-	done := make(chan string, 1)
-	output := newTunnelLog("cloudflared")
 
-	go func() {
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			if match := urlRegex.FindString(scanner.Text()); match != "" {
-				done <- match
-				return
-			}
-		}
-	}()
+	res := s.runTunnel(tunnelSpec{
+		provider: "cloudflared",
+		detail:   "quick tunnel",
+		timeout:  cloudflaredURLTimeout,
+		build: func(ctx context.Context) *exec.Cmd {
+			return exec.CommandContext(ctx, tunnelExe, "tunnel", "--url",
+				fmt.Sprintf("http://%s:%d", s.cfg.Host, s.cfg.Port))
+		},
+		match: urlRegex.FindString,
+	})
 
-	go func() {
-		scanner := bufio.NewScanner(stderrPipe)
-		for scanner.Scan() {
-			line := scanner.Text()
-			output.add(line)
-			if match := urlRegex.FindString(line); match != "" {
-				select {
-				case done <- match:
-				default:
-				}
-				return
-			}
-		}
-	}()
-
-	select {
-	case url := <-done:
-		s.tunnelStop = cancel
-		printTunnelURL(url)
-		return url
-	case <-time.After(cloudflaredURLTimeout):
-		cancel()
-		output.report()
+	switch {
+	case res.err != nil:
+		fmt.Printf("  warning: %s (cloudflared): %v\n", locales.T("error.cmd_failed"), res.err)
+		return ""
+	case res.url == "":
+		res.output.report()
 		return ""
 	}
+	return res.url
 }
 
 // findCloudflaredExecutable reports where the connector is, or "" when there is
@@ -1070,6 +1058,29 @@ func (s *Server) registerTools(server *mcp.Server) {
 					Roots:  roots,
 					Result: text,
 				}, nil
+		},
+	)
+
+	// server_status answers "is the tunnel still up", which nothing could
+	// answer before: /healthz proved only that the local listener was alive,
+	// and a dead provider left the published URL in place, so a caller that
+	// could not reach the server had no way to tell a problem at its own end
+	// from a tunnel that had exited an hour ago.
+	mcp.AddTool(server,
+		&mcp.Tool{
+			Name: "server_status",
+			Description: "Report this server's own health: version, uptime, and the state of the public tunnel. " +
+				"tunnel.state is off when no tunnel is configured, up while a provider is publishing, restarting between attempts, down once restarts have been given up on, and stopped after a deliberate shutdown. " +
+				"tunnel.restarts counts how often the provider had to be replaced and tunnel.lastExit carries the exit status of the process that died, which tells a URL that stopped working apart from a network problem at the caller's end. " +
+				"Set recentLines to include that many lines of the provider's own output, which is usually where the reason for an exit is. " +
+				"This tool takes no workspaceId: it describes the server, not a workspace.",
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, input ServerStatusInput) (*mcp.CallToolResult, ServerStatusOutput, error) {
+			out := s.serverStatus(input.RecentLines)
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{&mcp.TextContent{Text: out.Result}},
+			}, out, nil
 		},
 	)
 }

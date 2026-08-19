@@ -1,10 +1,8 @@
 package server
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"time"
@@ -37,71 +35,40 @@ func (s *Server) startNgrok() string {
 		fmt.Println("    starting ngrok with no reserved domain, so this URL will not survive a restart")
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, agent, tunnel.NgrokArgs(s.cfg.Host, s.cfg.Port, s.cfg.Tunnel.Domain)...)
-	if token := s.cfg.Tunnel.Authtoken; token != "" {
-		// Handed over as an environment variable rather than an argument, so the
-		// token does not show up in a process list.
-		cmd.Env = append(os.Environ(), "NGROK_AUTHTOKEN="+token)
-	}
+	res := s.runTunnel(tunnelSpec{
+		provider: "ngrok",
+		detail:   s.cfg.Tunnel.Domain,
+		timeout:  ngrokURLTimeout,
+		build: func(ctx context.Context) *exec.Cmd {
+			cmd := exec.CommandContext(ctx, agent, tunnel.NgrokArgs(s.cfg.Host, s.cfg.Port, s.cfg.Tunnel.Domain)...)
+			if token := s.cfg.Tunnel.Authtoken; token != "" {
+				// Handed over as an environment variable rather than an
+				// argument, so the token does not show up in a process list.
+				cmd.Env = append(os.Environ(), "NGROK_AUTHTOKEN="+token)
+			}
+			return cmd
+		},
+		match: tunnel.URLFromNgrokLine,
+		fatal: tunnel.NgrokFatalLine,
+	})
 
-	stdout, _ := cmd.StdoutPipe()
-	stderr, _ := cmd.StderrPipe()
-
-	if err := cmd.Start(); err != nil {
-		fmt.Printf("    ngrok would not start: %v\n", err)
-		cancel()
+	switch {
+	case res.err != nil:
+		fmt.Printf("    ngrok would not start: %v\n", res.err)
 		return ""
-	}
-
-	found := make(chan string, 1)
-	failed := make(chan string, 1)
-	output := newTunnelLog("ngrok")
-
-	watch := func(stream io.Reader) {
-		scanner := bufio.NewScanner(stream)
-		for scanner.Scan() {
-			line := scanner.Text()
-			output.add(line)
-
-			if url := tunnel.URLFromNgrokLine(line); url != "" {
-				select {
-				case found <- url:
-				default:
-				}
-				return
-			}
-			if code := tunnel.NgrokFatalLine(line); code != "" {
-				select {
-				case failed <- code:
-				default:
-				}
-				return
-			}
-		}
-	}
-	go watch(stdout)
-	go watch(stderr)
-
-	select {
-	case url := <-found:
-		s.tunnelStop = cancel
-		printTunnelURL(url)
-		return url
-	case code := <-failed:
+	case res.reason != "":
 		// Waiting out the whole timeout adds nothing once the agent has said it
 		// is giving up.
-		cancel()
-		fmt.Printf("    ngrok gave up: %s\n", code)
-		output.report()
+		fmt.Printf("    ngrok gave up: %s\n", res.reason)
+		res.output.report()
 		s.ngrokTokenHint()
 		return ""
-	case <-time.After(ngrokURLTimeout):
-		cancel()
-		output.report()
+	case res.url == "":
+		res.output.report()
 		s.ngrokTokenHint()
 		return ""
 	}
+	return res.url
 }
 
 // ngrokAgent returns the agent to run, fetching it once if this machine has none.
