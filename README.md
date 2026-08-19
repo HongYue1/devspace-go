@@ -12,8 +12,8 @@ This fork begins at upstream [cf8b26a](https://github.com/snakex21/devspace-go/c
 
 | | Upstream at cf8b26a | This fork |
 |---|---|---|
-| **MCP tools** | 11 | 16 |
-| **Tests** | 3 test files | 29 test files, 239 test functions |
+| **MCP tools** | 11 | 17 |
+| **Tests** | 3 test files | 37 test files, 287 test functions |
 | **CI** | None | gofmt, `go vet`, and tests on Linux, Windows, and macOS; four targets cross-compiled; release assets published from `v*` tags |
 | **Authentication** | None | Bearer token required on every route except `/healthz`, with CLI commands to print and rotate it |
 | **Tunnels** | Cloudflare quick tunnel, when `cloudflared` happened to be present | ngrok reserved domains, named Cloudflare tunnels created by one command, Pinggy, or off |
@@ -21,7 +21,9 @@ This fork begins at upstream [cf8b26a](https://github.com/snakex21/devspace-go/c
 | **Language** | 51 locale files; an unrecognised system language fell back to Polish | English only |
 | **Binaries** | Server plus a separate GUI | Server only |
 
-The five tools added here are `remove`, `list_roots`, `job_status`, `job_kill`, and `job_list`. Beyond those, `bash` gained a background mode, `grep` gained `caseInsensitive`, `contextLines`, and `maxMatches`, `write` preserves a file's existing line endings instead of normalising them, and the build version is stamped into the binary and reported in the MCP handshake.
+The six tools added here are `remove`, `list_roots`, `job_status`, `job_kill`, `job_list`, and `recent_changes`. Beyond those, `bash` gained a background mode, `grep` gained `caseInsensitive`, `contextLines`, and `maxMatches`, `write` preserves a file's existing line endings instead of normalising them, and the build version is stamped into the binary and reported in the MCP handshake.
+
+The most recent round of work came from a different kind of source. A long agent session was asked what had gone wrong while using this server, and the answers were implemented; they are collected under [Working with an agent's memory](#working-with-an-agents-memory). They share a theme worth stating once: an agent cannot see the file system, so a tool result is the only evidence it has, and a result that is silent about its own limits invites a confident wrong conclusion. A truncated read looks like a whole file, an empty search looks like proof of absence, a failed batch edit looks like a half-written file, and uncommitted work left by someone else looks like work the agent itself forgot.
 
 ---
 
@@ -30,6 +32,7 @@ The five tools added here are `remove`, `list_roots`, `job_status`, `job_kill`, 
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
 - [Tools](#tools)
+- [Working with an agent's memory](#working-with-an-agents-memory)
 - [Configuration](#configuration)
 - [Remote access](#remote-access)
 - [Shells](#shells)
@@ -84,26 +87,27 @@ A legacy SSE endpoint is served at `/sse` for clients that still expect it. For 
 
 ## Tools
 
-A session starts by opening one of the configured roots as a workspace. Every later call carries the returned `workspaceId`, and every path is resolved inside that root.
+A session starts by opening one of the configured roots as a workspace. Every later call carries the returned `workspaceId`, and every path is resolved inside that root. `default` and `latest` work in place of an id, and the job tools are addressed by `jobId` alone.
 
 | Tool | Purpose |
 |---|---|
 | `list_roots` | The roots this server accepts, with the git branch of each and which one is the default |
-| `open_workspace` | Open a root as a workspace; returns a `workspaceId` and any `AGENTS.md` or `CLAUDE.md` found in it |
+| `open_workspace` | Open a root as a workspace; returns a `workspaceId`, any `AGENTS.md` or `CLAUDE.md` found in it, and the repository's branch and uncommitted files |
 | `open_default_workspace` | The same, without sending a local path, for clients that block absolute paths |
-| `read` | Read a file, optionally from an offset and for a limited number of lines |
-| `write` | Create a file or replace one completely, keeping its existing line endings |
-| `edit` | Replace exact text blocks, with `replaceAll`, `expectedOccurrences`, and `dryRun` |
+| `read` | Read one file or up to 20 at once, from an offset, reporting the line range, total line count, sha256, and line ending of each |
+| `write` | Create a file or replace one completely, keeping its existing line endings, optionally only while it still matches a sha256 |
+| `edit` | Replace exact text blocks, with `replaceAll`, `expectedOccurrences`, `dryRun`, and the same optional sha256 guard |
 | `mkdir` | Create a directory, including missing parents |
 | `move` | Move or rename a file or directory, creating parent directories as needed |
 | `remove` | Delete a file or directory, with `recursive` and `dryRun` |
-| `grep` | Regex search over file contents, with an include glob, `caseInsensitive`, `contextLines`, and `maxMatches` |
+| `grep` | Regex search over file contents, with an include glob, `caseInsensitive`, `contextLines`, and `maxMatches`; reports how many files it opened |
 | `glob` | Find files by pattern |
-| `ls` | List a directory |
+| `ls` | List a directory, with the type, size, and modification time of every entry |
 | `bash` | Run a shell command, in the foreground or as a background job |
 | `job_status` | Read a background job, streaming output from a cursor and optionally waiting for the end |
 | `job_kill` | Stop a background job and every process it started |
 | `job_list` | The tracked jobs, newest first |
+| `recent_changes` | What this server process wrote, newest first, cross-checked against the repository's uncommitted files |
 
 Project instructions are part of the handshake rather than something to hunt for: `open_workspace` returns the contents of `AGENTS.md` or `CLAUDE.md` at the root, and lists any others found deeper in the tree so they can be read before touching the code they describe.
 
@@ -123,6 +127,47 @@ A `timeout` above 120 seconds starts a background job rather than failing partwa
 ### Deleting files
 
 `remove` exists so that deleting something does not require handing `rm -rf` to a shell. It refuses the workspace root itself and any `.git` directory, requires `recursive` for a directory that is not empty, and reports what would go when called with `dryRun`.
+
+---
+
+## Working with an agent's memory
+
+An agent has no window onto the file system. A tool result is its whole world, and whatever a result leaves unsaid gets filled in by inference instead. These behaviours exist so that the inference is unnecessary.
+
+### Every result states its own scope
+
+| Question | Answered by |
+|---|---|
+| Did I read all of that file? | `read` returns `startLine`, `endLine`, `totalLines`, `nextLine`, and `isTruncated`, and closes its text with the same summary in one line |
+| Is that offset past the end? | `read` reports `pastEndOfFile` together with the real line count, rather than empty content that reads like an empty file |
+| Did that search prove anything? | `grep` reports `filesSearched` and the search root even when nothing matched, and says so outright when an include glob matched no file at all, because searching nothing is not evidence |
+| What is actually in this directory? | `ls` always returns structured entries with type, size, and modification time; `details: true` adds full timestamps to the text as well |
+
+`read` also takes `paths` for up to 20 files in one call, with the same metadata for each and a per-file `error` rather than a failed batch, and `metadataOnly: true` to get sizes, hashes, and line counts without spending context on contents.
+
+### Knowing what you wrote
+
+`recent_changes` answers "what have I changed?" from the server's own journal of every `write`, `edit`, `move`, `remove`, and `mkdir`, newest first, filterable by `path` or `op`. It exists because that question cannot be answered from a transcript that has been compacted, and because guessing at it invents a second writer that does not exist.
+
+It also does the part a journal cannot do alone. A journal only proves what this process wrote; it says nothing about work that was already there. So `recent_changes` reads the repository's uncommitted files too and reports `unexplainedDirtyPaths`: uncommitted work this server did not write. An empty list means every dirty file is the agent's own doing. A non-empty one names the files that were somebody else's, which is the actual provenance question.
+
+### Editing against a file that moved
+
+`read`, `write`, and `edit` all return a `sha256` of the bytes on disk, and `write` and `edit` accept `expectedSha256` (or `expectedModifiedAt`) to apply a change only while the file still matches. A mismatch is refused with "the file changed since you last read it", both hashes, and an explicit note that nothing was written. That is kept deliberately distinct from "the text was not found", because the two have different fixes and only one of them is solved by re-reading the file.
+
+Preconditions are optional, so existing callers are unaffected. The hash covers the bytes on disk rather than the text `read` returned, which is what lets it detect a foreign writer even on a file whose line endings differ from the text handed back.
+
+### Failed edits say what happened to the file
+
+`edit` remains all or nothing. When one block of a batch fails, the report leads with `file unchanged: no edits were applied`, then lists every requested edit as matched (with its line, and marked safe to re-issue), failed (with the nearest near-match, the first differing character, and the `dryRun` tip), or not attempted because an earlier edit failed first. A dry run says `Nothing was written` for the same reason: a result that reads like a finished edit will be treated as one.
+
+### Fewer ways to get lost
+
+- The job tools accept a `workspaceId` and ignore it, so the argument `bash` insists on is not an error one call later. Every job report spells out its exact follow-up call, `job_status {"jobId": "...", "wait": 25}`, and stops offering one once the job has finished and its output has been read.
+- A stale or unknown `workspaceId` is answered with the fact that `default` and `latest` both select the most recent workspace, instead of leaving that in server instructions a client showed once at startup.
+- `open_workspace` reports the branch, HEAD, and uncommitted files of the repository it opened, so uncommitted work is known before the first edit rather than discovered halfway through one.
+
+Each of these is repeated in the relevant tool's own schema description, because that is what a client reliably shows an agent; server instructions are shown once, if at all.
 
 ---
 
@@ -296,10 +341,10 @@ devspace-go/
 │   ├── server/              HTTP routing, MCP registration, auth, tunnel orchestration
 │   ├── shells/              Shell detection and argument handling
 │   ├── store/               SQLite-backed workspace sessions
-│   ├── tools/               read, write, edit, grep, glob, ls, remove, bash, background jobs
+│   ├── tools/               read, write, edit, grep, glob, ls, remove, bash, background jobs, write journal
 │   ├── tunnel/              Finds, fetches, and runs ngrok and cloudflared
 │   ├── version/             Version stamped in at build time
-│   └── workspace/           Root discovery and path validation
+│   └── workspace/           Root discovery, path validation, git state
 ├── scripts/                 Build scripts and a Tampermonkey auto-approve userscript
 └── .github/workflows/       Test, cross-compile, and release
 ```
