@@ -202,6 +202,14 @@ func RemovePath(ctx context.Context, req *mcp.CallToolRequest, input RemoveInput
 		return fail(fmt.Errorf("cannot delete %s: %v", requested, err))
 	}
 
+	// Journalled so that recent_changes can account for a path that has since
+	// vanished, which is otherwise the hardest kind of change to explain.
+	removalDetail := "file"
+	if isDir {
+		removalDetail = fmt.Sprintf("directory with %d file(s), %d directory(ies)", tally.files, tally.directories)
+	}
+	recordChange(ChangeRemove, wsRoot, display, tally.bytes, removalDetail)
+
 	text := summary.String()
 	return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: text}},

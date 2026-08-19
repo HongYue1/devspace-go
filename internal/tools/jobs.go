@@ -357,10 +357,11 @@ func normalizeJobTimeout(requested int) int {
 
 // JobStatusInput represents the input for the job_status tool.
 type JobStatusInput struct {
-	JobID     string `json:"jobId" jsonschema:"Job identifier returned by the shell tool when background is true."`
-	SinceLine int    `json:"sinceLine,omitempty" jsonschema:"Return output from this 1-based line onward. Pass the nextLine from the previous call to stream new output without repeating what you already read."`
-	MaxLines  int    `json:"maxLines,omitempty" jsonschema:"Maximum output lines to return. Defaults to 200, max 2000."`
-	Wait      int    `json:"wait,omitempty" jsonschema:"Seconds to wait for the job to finish before answering. Defaults to 0, which answers immediately. Max 25. Prefer this over sleeping in a shell command."`
+	JobID       string `json:"jobId" jsonschema:"Job identifier returned by the shell tool when background is true."`
+	WorkspaceID string `json:"workspaceId,omitempty" jsonschema:"Ignored. Jobs are addressed by jobId alone, but this is accepted so that passing the same workspaceId used for the shell tool is never rejected as an unexpected property."`
+	SinceLine   int    `json:"sinceLine,omitempty" jsonschema:"Return output from this 1-based line onward. Pass the nextLine from the previous call to stream new output without repeating what you already read."`
+	MaxLines    int    `json:"maxLines,omitempty" jsonschema:"Maximum output lines to return. Defaults to 200, max 2000."`
+	Wait        int    `json:"wait,omitempty" jsonschema:"Seconds to wait for the job to finish before answering. Defaults to 0, which answers immediately. Max 25. Prefer this over sleeping in a shell command."`
 }
 
 // JobStatusOutput represents the output for the job_status tool.
@@ -374,6 +375,7 @@ type JobStatusOutput struct {
 	NextLine     int    `json:"nextLine" jsonschema:"Pass this as sinceLine on the next call to continue where this answer stopped."`
 	TotalLines   int    `json:"totalLines" jsonschema:"Total lines the job has printed so far."`
 	DroppedLines int    `json:"droppedLines,omitempty" jsonschema:"Oldest lines discarded because the job exceeded the in-memory output cap."`
+	NextCall     string `json:"nextCall,omitempty" jsonschema:"The exact follow-up call worth making, already filled in with jobId and sinceLine. Empty once the job has finished and all of its output has been returned."`
 	Result       string `json:"result" jsonschema:"Human readable summary of the job and the returned output."`
 }
 
@@ -430,6 +432,19 @@ func JobStatus(ctx context.Context, req *mcp.CallToolRequest, input JobStatusInp
 		fmt.Fprintf(&report, "[finished with exit code %d]", exitCode)
 	}
 
+	// Spelling out the next call removes the guesswork about which arguments
+	// this tool takes, which is the part callers most often get wrong.
+	nextCall := ""
+	switch {
+	case status == JobRunning:
+		nextCall = fmt.Sprintf(`job_status {"jobId":%q,"sinceLine":%d,"wait":%d}`, j.id, next, maxJobWaitSeconds)
+	case next <= total:
+		nextCall = fmt.Sprintf(`job_status {"jobId":%q,"sinceLine":%d}`, j.id, next)
+	}
+	if nextCall != "" {
+		fmt.Fprintf(&report, "\nNext call: %s", nextCall)
+	}
+
 	text := truncateOutput(report.String())
 	return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: text}},
@@ -443,13 +458,15 @@ func JobStatus(ctx context.Context, req *mcp.CallToolRequest, input JobStatusInp
 			NextLine:     next,
 			TotalLines:   total,
 			DroppedLines: dropped,
+			NextCall:     nextCall,
 			Result:       text,
 		}, nil
 }
 
 // JobKillInput represents the input for the job_kill tool.
 type JobKillInput struct {
-	JobID string `json:"jobId" jsonschema:"Job identifier to stop."`
+	JobID       string `json:"jobId" jsonschema:"Job identifier to stop."`
+	WorkspaceID string `json:"workspaceId,omitempty" jsonschema:"Ignored. Jobs are addressed by jobId alone, but this is accepted so that passing the same workspaceId used for the shell tool is never rejected as an unexpected property."`
 }
 
 // JobKillOutput represents the output for the job_kill tool.
@@ -494,7 +511,9 @@ func JobKill(ctx context.Context, req *mcp.CallToolRequest, input JobKillInput) 
 }
 
 // JobListInput represents the input for the job_list tool.
-type JobListInput struct{}
+type JobListInput struct {
+	WorkspaceID string `json:"workspaceId,omitempty" jsonschema:"Ignored. Jobs are tracked per server process, not per workspace, but this is accepted so that passing the same workspaceId used for the shell tool is never rejected as an unexpected property."`
+}
 
 // JobSummary describes one tracked job.
 type JobSummary struct {

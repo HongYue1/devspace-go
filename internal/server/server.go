@@ -589,7 +589,7 @@ func (s *Server) registerTools(server *mcp.Server) {
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "open_workspace",
-			Description: "Open a local project directory as a coding workspace. If path is empty or 'default', opens the first configured allowed root. Call this once per project folder or worktree before reading, editing, searching, writing, or running commands. Reuse the returned workspaceId for later calls in the same folder. If a remote client blocks local absolute paths, call open_default_workspace instead.",
+			Description: "Open a local project directory as a coding workspace. If path is empty or 'default', opens the first configured allowed root. Call this once per project folder or worktree before reading, editing, searching, writing, or running commands. Reuse the returned workspaceId for later calls in the same folder; if it ever stops working, pass 'default' or 'latest' as the workspaceId to reach the most recent workspace instead of reopening. Returns any AGENTS instruction files found in the project and the repository's git state, including how many paths are uncommitted and a sample of them, so pre-existing work is visible before you edit over it. If a remote client blocks local absolute paths, call open_default_workspace instead.",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, input OpenWorkspaceInput) (*mcp.CallToolResult, OpenWorkspaceOutput, error) {
@@ -621,8 +621,9 @@ func (s *Server) registerTools(server *mcp.Server) {
 
 			instruction := "Use this workspaceId in all subsequent tool calls for this project. Do not call open_workspace again for this same folder unless this workspaceId stops working, the user asks to reopen, or you switch to a different folder/worktree."
 
-			resultText := fmt.Sprintf("Opened workspace %s\nRoot: %s\nMode: %s\n%s",
-				wsCtx.Workspace.ID, wsCtx.Workspace.Root, wsCtx.Workspace.Mode, instruction)
+			resultText := fmt.Sprintf("Opened workspace %s\nRoot: %s\nMode: %s\n%s\n%s",
+				wsCtx.Workspace.ID, wsCtx.Workspace.Root, wsCtx.Workspace.Mode,
+				describeGitForOpen(wsCtx.Git), instruction)
 
 			return &mcp.CallToolResult{
 					Content: []mcp.Content{&mcp.TextContent{Text: resultText}},
@@ -632,6 +633,7 @@ func (s *Server) registerTools(server *mcp.Server) {
 					Mode:                 string(wsCtx.Workspace.Mode),
 					AgentsFiles:          agentsFiles,
 					AvailableAgentsFiles: availableAgentsFiles,
+					Git:                  wsCtx.Git,
 					Instruction:          instruction,
 				}, nil
 		},
@@ -642,7 +644,7 @@ func (s *Server) registerTools(server *mcp.Server) {
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "open_default_workspace",
-			Description: "Open the default configured workspace without sending a local path. Use this when open_workspace with an absolute Windows/macOS/Linux path is blocked by the MCP client. Returns a workspaceId for the first allowed root.",
+			Description: "Open the default configured workspace without sending a local path. Use this when open_workspace with an absolute Windows/macOS/Linux path is blocked by the MCP client. Returns a workspaceId for the first allowed root, together with its AGENTS instruction files and git state, including how many paths the repository already has uncommitted.",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, input OpenDefaultWorkspaceInput) (*mcp.CallToolResult, OpenWorkspaceOutput, error) {
@@ -668,8 +670,9 @@ func (s *Server) registerTools(server *mcp.Server) {
 			}
 
 			instruction := "Use this workspaceId in all subsequent tool calls for this project. You may also pass workspaceId 'default' or 'latest' if the exact ID is stale after reconnecting."
-			resultText := fmt.Sprintf("Opened default workspace %s\nRoot: %s\nMode: %s\n%s",
-				wsCtx.Workspace.ID, wsCtx.Workspace.Root, wsCtx.Workspace.Mode, instruction)
+			resultText := fmt.Sprintf("Opened default workspace %s\nRoot: %s\nMode: %s\n%s\n%s",
+				wsCtx.Workspace.ID, wsCtx.Workspace.Root, wsCtx.Workspace.Mode,
+				describeGitForOpen(wsCtx.Git), instruction)
 
 			return &mcp.CallToolResult{
 					Content: []mcp.Content{&mcp.TextContent{Text: resultText}},
@@ -679,6 +682,7 @@ func (s *Server) registerTools(server *mcp.Server) {
 					Mode:                 string(wsCtx.Workspace.Mode),
 					AgentsFiles:          agentsFiles,
 					AvailableAgentsFiles: availableAgentsFiles,
+					Git:                  wsCtx.Git,
 					Instruction:          instruction,
 				}, nil
 		},
@@ -688,7 +692,7 @@ func (s *Server) registerTools(server *mcp.Server) {
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        names.Read,
-			Description: "Read a file inside an open workspace. Use this for file inspection instead of shell commands like cat. Call open_workspace first and pass workspaceId.",
+			Description: "Read one or many files inside an open workspace. Use this for file inspection instead of shell commands like cat. Pass path for a single file, or paths for up to 20 files in one call, which turns a reconnaissance pass into one round trip. Every file reports totalLines, startLine, endLine, isTruncated and nextLine, so a partial read is never mistaken for a whole file: while isTruncated is true, call again with offset set to nextLine. An offset past the end of the file reports the real line count instead of looking like an empty file. Each file also carries sha256, modifiedAt and lineEnding; pass that sha256 to edit or write as expectedSha256 to be told if anything else changed the file in between. Set metadataOnly to get size, line count, line endings and sha256 without spending context on the contents. The text result ends with a bracketed summary line that describes the read and is not part of the file, so when copying text into an edit take it from files[].content. Call open_workspace first and pass workspaceId.",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, input tools.ReadInput) (*mcp.CallToolResult, tools.ReadOutput, error) {
@@ -715,7 +719,7 @@ func (s *Server) registerTools(server *mcp.Server) {
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        names.Write,
-			Description: fmt.Sprintf("Create or completely overwrite a file inside an open workspace. Prefer %s for targeted changes to existing files. Call open_workspace first and pass workspaceId.", names.Edit),
+			Description: fmt.Sprintf("Create or completely overwrite a file inside an open workspace. Prefer %s for targeted changes to existing files, because this replaces the entire file. Optionally pass expectedSha256, taken from an earlier read, write or edit of the same file, to make the call fail loudly instead of silently overwriting work that arrived after you last looked. Returns created, bytes, sha256, modifiedAt and lineEnding, and that sha256 is the value to pass as expectedSha256 next time. Call open_workspace first and pass workspaceId.", names.Edit),
 			Annotations: &mcp.ToolAnnotations{
 				ReadOnlyHint:    false,
 				DestructiveHint: boolPtr(true),
@@ -849,7 +853,7 @@ func (s *Server) registerTools(server *mcp.Server) {
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        names.Edit,
-			Description: fmt.Sprintf("Edit one file inside an open workspace by replacing exact text blocks. Each edit must match uniquely unless you set replaceAll or expectedOccurrences. Set dryRun to report where the edits would land without writing. Prefer this over %s for targeted changes. Call open_workspace first and pass workspaceId.", names.Write),
+			Description: fmt.Sprintf("Edit one file inside an open workspace by replacing exact text blocks. Each edit must match uniquely unless you set replaceAll or expectedOccurrences. Every edit is applied or none is: when one fails, the file is left byte for byte unchanged, and the error says so explicitly, reports the status of every edit in the batch as matched, failed or not attempted, and shows the closest text in the file to the block that did not match. Edits reported as matched are safe to re-issue unchanged. Set dryRun to report where the edits would land without writing. Optionally pass expectedSha256 from an earlier read, write or edit so that a file changed by someone else is reported as exactly that, rather than as oldText not being found. Prefer this over %s for targeted changes. Call open_workspace first and pass workspaceId.", names.Write),
 			Annotations: &mcp.ToolAnnotations{
 				DestructiveHint: boolPtr(true),
 				IdempotentHint:  false,
@@ -881,7 +885,7 @@ func (s *Server) registerTools(server *mcp.Server) {
 		mcp.AddTool(server,
 			&mcp.Tool{
 				Name:        names.Grep,
-				Description: "Search file contents inside an open workspace. Use this before broad reads when looking for symbols, text, or usage sites. Call open_workspace first and pass workspaceId.",
+				Description: "Search file contents inside an open workspace. Use this before broad reads when looking for symbols, text, or usage sites. Zero matches is reported together with filesSearched, filesSkipped and the search root that was actually walked, so an honest absence can be told apart from a search that never opened a file: filesSearched of zero means the path, the include glob or the skip list excluded everything and the pattern was never really tested. Version control, dependency and build directories are always skipped. The pattern is a Go regular expression and is case sensitive unless caseInsensitive is set. Call open_workspace first and pass workspaceId.",
 				Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 			},
 			func(ctx context.Context, req *mcp.CallToolRequest, input tools.GrepInput) (*mcp.CallToolResult, tools.GrepOutput, error) {
@@ -919,7 +923,7 @@ func (s *Server) registerTools(server *mcp.Server) {
 		mcp.AddTool(server,
 			&mcp.Tool{
 				Name:        names.Ls,
-				Description: "List a directory inside an open workspace. Use this for directory inspection before reading files. Call open_workspace first and pass workspaceId.",
+				Description: "List a directory inside an open workspace. Use this for directory inspection before reading files, and in place of shelling out to ls -l: every entry is returned with name, path, type, size in bytes and an RFC 3339 modifiedAt, which is enough for a provenance or conflict check. Set details to put full timestamps in the text listing as well. Call open_workspace first and pass workspaceId.",
 				Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 			},
 			func(ctx context.Context, req *mcp.CallToolRequest, input tools.LsInput) (*mcp.CallToolResult, tools.LsOutput, error) {
@@ -975,7 +979,7 @@ func (s *Server) registerTools(server *mcp.Server) {
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "job_status",
-			Description: fmt.Sprintf("Report a background job started by %s and stream its output. Pass the nextLine from the previous answer as sinceLine to read only what is new, and set wait to block up to 25 seconds for the job to finish instead of sleeping in a shell command.", names.Bash),
+			Description: fmt.Sprintf("Report a background job started by %s and stream its output. Pass the nextLine from the previous answer as sinceLine to read only what is new, and set wait to block up to 25 seconds for the job to finish instead of sleeping in a shell command. This tool is addressed by jobId, not by workspaceId; a workspaceId is accepted and ignored, so reusing the arguments you passed to the shell is harmless. Each answer includes nextCall, the exact follow-up call to make, already filled in.", names.Bash),
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 		},
 		tools.JobStatus,
@@ -984,7 +988,7 @@ func (s *Server) registerTools(server *mcp.Server) {
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "job_kill",
-			Description: "Stop a background job and every process it started. Stopping a job that already finished is reported, not an error.",
+			Description: "Stop a background job and every process it started. Stopping a job that already finished is reported, not an error. Addressed by jobId, not by workspaceId; a workspaceId is accepted and ignored.",
 			Annotations: &mcp.ToolAnnotations{
 				ReadOnlyHint:    false,
 				DestructiveHint: boolPtr(true),
@@ -998,13 +1002,34 @@ func (s *Server) registerTools(server *mcp.Server) {
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "job_list",
-			Description: "List the background jobs this server is tracking, newest first, with their state and how much output each has produced.",
+			Description: "List the background jobs this server is tracking, newest first, with their state and how much output each has produced. Takes no required arguments; a workspaceId is accepted and ignored, because jobs belong to the server process rather than to one workspace.",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 		},
 		tools.JobList,
 	)
 
 	// list_roots
+	// recent_changes answers "what have I actually written?" from the server's
+	// own journal, which outlives the caller's memory of its own session.
+	mcp.AddTool(server,
+		&mcp.Tool{
+			Name:        "recent_changes",
+			Description: "List the files this server process changed through its own write, edit, move, remove and mkdir tools, newest first, with timestamps, and cross-check them against the paths git reports as uncommitted. Call this when you have lost track of your own edits, before concluding that another process is writing files concurrently, or to confirm that an edit really landed. unexplainedDirtyPaths is the important field: it lists uncommitted paths this server never wrote, and it is the only evidence that something else touched the repository. The journal is held in memory, is capped at the last 1000 changes, and starts empty when the server restarts, so an empty journal means this process has written nothing rather than that the tree is clean.",
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, input tools.RecentChangesInput) (*mcp.CallToolResult, tools.RecentChangesOutput, error) {
+			ws, err := s.registry.GetWorkspace(input.WorkspaceID)
+			if err != nil {
+				result := &mcp.CallToolResult{}
+				result.SetError(err)
+				return result, tools.RecentChangesOutput{}, nil
+			}
+
+			res, out, err := tools.RecentChanges(ctx, req, input, ws.Root)
+			return prefixNotice(res, ws), out, err
+		},
+	)
+
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "list_roots",
@@ -1194,6 +1219,24 @@ func isDiscoveryRequest(method, path string) bool {
 	return false
 }
 
+// describeGitForOpen renders the repository state for the text summary of an
+// opened workspace. Uncommitted work is worth seeing before the first edit
+// rather than after a confusing conflict.
+func describeGitForOpen(state workspace.GitState) string {
+	report := "Git: " + state.Summary
+	if state.DirtyCount > 0 && len(state.DirtyPaths) > 0 {
+		report += "\nUncommitted:"
+		for _, path := range state.DirtyPaths {
+			report += "\n  " + path
+		}
+		if state.DirtyPathsTruncated {
+			report += fmt.Sprintf("\n  ...and %d more", state.DirtyCount-len(state.DirtyPaths))
+		}
+		report += "\nThat work was already there before this call. Ask recent_changes which of it this server process wrote."
+	}
+	return report
+}
+
 // --- types ---
 
 type OpenWorkspaceInput struct {
@@ -1217,6 +1260,7 @@ type OpenWorkspaceOutput struct {
 	Mode                 string                      `json:"mode"`
 	AgentsFiles          []AgentsFileOutput          `json:"agentsFiles"`
 	AvailableAgentsFiles []AvailableAgentsFileOutput `json:"availableAgentsFiles"`
+	Git                  workspace.GitState          `json:"git" jsonschema:"Repository state at the moment the workspace was opened. A non-zero dirtyCount means uncommitted work was already there before you touched anything; recent_changes says whether this server process wrote it."`
 	Instruction          string                      `json:"instruction"`
 }
 

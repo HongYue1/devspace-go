@@ -152,6 +152,119 @@ func findLineBlocks(content, needle string) [][2]int {
 	return blocks
 }
 
+// Match outcomes for one requested edit.
+const (
+	matchStatusMatched      = "matched"
+	matchStatusFailed       = "failed"
+	matchStatusNotAttempted = "not_attempted"
+)
+
+// editAttempt records what happened to a single edit in the batch.
+//
+// A caller told only that "edit 2 did not match" still has to guess whether
+// edits 1 and 3 landed. Recording every edit's outcome turns that guess into a
+// fact, which is what makes a failed batch safe to re-issue.
+type editAttempt struct {
+	index       int
+	status      string
+	how         string
+	occurrences int
+	lines       []int
+}
+
+// note renders the line a successful edit contributes to the success report.
+func (a editAttempt) note() string {
+	switch {
+	case a.occurrences > 1:
+		return fmt.Sprintf("  edit %d: %d occurrences on lines %s, %s",
+			a.index, a.occurrences, joinInts(a.lines), a.how)
+	case len(a.lines) == 1:
+		return fmt.Sprintf("  edit %d: line %d, %s", a.index, a.lines[0], a.how)
+	default:
+		return fmt.Sprintf("  edit %d: %s", a.index, a.how)
+	}
+}
+
+// describe renders one row of the per-edit status list in a failure report.
+func (a editAttempt) describe() string {
+	switch a.status {
+	case matchStatusMatched:
+		switch {
+		case a.occurrences > 1:
+			return fmt.Sprintf("matched %d occurrences on lines %s, %s (safe to re-issue unchanged)",
+				a.occurrences, joinInts(a.lines), a.how)
+		case len(a.lines) == 1:
+			return fmt.Sprintf("matched at line %d, %s (safe to re-issue unchanged)", a.lines[0], a.how)
+		default:
+			return "matched (safe to re-issue unchanged)"
+		}
+	case matchStatusFailed:
+		return "FAILED, described below"
+	default:
+		return "not attempted, because an earlier edit failed first"
+	}
+}
+
+// renderEditFailure states the outcome for the file and for every edit in the
+// batch, then hands over to the diagnostic for the edit that actually failed.
+func renderEditFailure(total int, attempts []editAttempt, cause error) error {
+	failing := 0
+	for _, attempt := range attempts {
+		if attempt.status == matchStatusFailed {
+			failing = attempt.index
+		}
+	}
+
+	head, tail := splitFirstLine(cause.Error())
+	head = strings.TrimPrefix(head, fmt.Sprintf("edit %d: ", failing))
+
+	var message strings.Builder
+	if failing > 0 && total > 1 {
+		fmt.Fprintf(&message, "edit %d of %d failed: %s", failing, total, head)
+	} else {
+		message.WriteString(head)
+	}
+	message.WriteString("\n  file unchanged: no edits were applied, because edit is all or nothing")
+
+	if total > 1 {
+		message.WriteString("\n  edit status:")
+		for _, attempt := range attempts {
+			fmt.Fprintf(&message, "\n    %d. %s", attempt.index, attempt.describe())
+		}
+	}
+	if tail != "" {
+		message.WriteString("\n")
+		message.WriteString(tail)
+	}
+	return errors.New(message.String())
+}
+
+// splitFirstLine separates a message's headline from its detail.
+func splitFirstLine(text string) (string, string) {
+	if index := strings.Index(text, "\n"); index >= 0 {
+		return text[:index], text[index+1:]
+	}
+	return text, ""
+}
+
+// joinInts renders line numbers for a message.
+func joinInts(numbers []int) string {
+	rendered := make([]string, 0, len(numbers))
+	for _, number := range numbers {
+		rendered = append(rendered, strconv.Itoa(number))
+	}
+	return strings.Join(rendered, ", ")
+}
+
+// lineNumbersAt maps byte offsets to 1-based line numbers.
+func lineNumbersAt(content string, starts []int) []int {
+	numbers := make([]int, 0, len(starts))
+	for _, start := range starts {
+		numbers = append(numbers, lineNumberAt(content, start))
+	}
+	return numbers
+}
+
 // editDiagnostic describes the closest thing to oldText that the file contains.
 type editDiagnostic struct {
 	line      int
@@ -243,6 +356,9 @@ func editNotFoundError(number int, path, original, content, needle string) error
 	} else {
 		message.WriteString("\n  note: line endings and trailing whitespace are already ignored when matching")
 	}
+	if looksLikeReadFooter(needle) {
+		message.WriteString("\n  note: oldText contains read's closing summary, such as [lines 1-40 of 120; end of file]. That line reports on the read and is not in the file, so remove it from oldText.")
+	}
 	message.WriteString("\n  tip: pass dryRun to test an edit without writing")
 
 	return errors.New(message.String())
@@ -250,11 +366,17 @@ func editNotFoundError(number int, path, original, content, needle string) error
 
 // joinLineNumbers renders the 1-based line number of each offset.
 func joinLineNumbers(content string, starts []int) string {
-	numbers := make([]string, 0, len(starts))
-	for _, start := range starts {
-		numbers = append(numbers, strconv.Itoa(lineNumberAt(content, start)))
+	return joinInts(lineNumbersAt(content, starts))
+}
+
+// looksLikeReadFooter spots the summary line that read appends to its output.
+// That line describes the read, so pasting it back as oldText can never match.
+func looksLikeReadFooter(needle string) bool {
+	if !strings.Contains(needle, "[lines ") {
+		return false
 	}
-	return strings.Join(numbers, ", ")
+	return strings.Contains(needle, "; end of file]") ||
+		strings.Contains(needle, "not shown, continue with offset")
 }
 
 // editAmbiguousError lists where the duplicate matches are, so the caller can
@@ -267,19 +389,26 @@ func editAmbiguousError(number int, content string, starts []int) error {
 
 // replaceSpans rewrites every span, after checking the match count against
 // what the caller said to expect.
-func replaceSpans(content string, spans [][2]int, edit EditBlock, number int, how string) (string, string, error) {
+func replaceSpans(content string, spans [][2]int, edit EditBlock, number int, how string) (string, editAttempt, error) {
 	starts := make([]int, 0, len(spans))
 	for _, span := range spans {
 		starts = append(starts, span[0])
 	}
+	attempt := editAttempt{
+		index:       number,
+		status:      matchStatusFailed,
+		how:         how,
+		occurrences: len(spans),
+		lines:       lineNumbersAt(content, starts),
+	}
 
 	switch {
 	case edit.ExpectedOccurrences > 0 && len(spans) != edit.ExpectedOccurrences:
-		return "", "", fmt.Errorf(
+		return "", attempt, fmt.Errorf(
 			"edit %d: oldText matches %d times (lines %s), expectedOccurrences is %d",
 			number, len(spans), joinLineNumbers(content, starts), edit.ExpectedOccurrences)
 	case edit.ExpectedOccurrences == 0 && !edit.ReplaceAll && len(spans) > 1:
-		return "", "", editAmbiguousError(number, content, starts)
+		return "", attempt, editAmbiguousError(number, content, starts)
 	}
 
 	// Rewrite from the end so the earlier offsets stay valid.
@@ -288,22 +417,20 @@ func replaceSpans(content string, spans [][2]int, edit EditBlock, number int, ho
 		updated = updated[:spans[i][0]] + edit.NewText + updated[spans[i][1]:]
 	}
 
-	note := fmt.Sprintf("  edit %d: line %d, %s", number, lineNumberAt(content, starts[0]), how)
-	if len(spans) > 1 {
-		note = fmt.Sprintf("  edit %d: %d occurrences on lines %s, %s",
-			number, len(spans), joinLineNumbers(content, starts), how)
-	}
-	return updated, note, nil
+	attempt.status = matchStatusMatched
+	return updated, attempt, nil
 }
 
 // applyEdit replaces oldText, falling back to a whitespace tolerant line match
 // when the exact text is absent.
-func applyEdit(content string, edit EditBlock, number int, path, original string, allowTolerant bool) (string, string, error) {
+func applyEdit(content string, edit EditBlock, number int, path, original string, allowTolerant bool) (string, editAttempt, error) {
+	failed := editAttempt{index: number, status: matchStatusFailed}
+
 	if edit.OldText == "" {
-		return "", "", fmt.Errorf("edit %d: oldText must not be empty", number)
+		return "", failed, fmt.Errorf("edit %d: oldText must not be empty", number)
 	}
 	if edit.ExpectedOccurrences < 0 {
-		return "", "", fmt.Errorf("edit %d: expectedOccurrences must not be negative", number)
+		return "", failed, fmt.Errorf("edit %d: expectedOccurrences must not be negative", number)
 	}
 
 	if starts := findOccurrences(content, edit.OldText); len(starts) > 0 {
@@ -320,5 +447,5 @@ func applyEdit(content string, edit EditBlock, number int, path, original string
 		}
 	}
 
-	return "", "", editNotFoundError(number, path, original, content, edit.OldText)
+	return "", failed, editNotFoundError(number, path, original, content, edit.OldText)
 }

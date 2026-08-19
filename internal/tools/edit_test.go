@@ -128,7 +128,12 @@ func TestEditAcceptsTextReturnedByRead(t *testing.T) {
 		t.Fatalf("ReadFile returned an error: %v", err)
 	}
 
-	lines := strings.Split(strings.TrimRight(readOut.Result, "\n"), "\n")
+	if len(readOut.Files) != 1 {
+		t.Fatalf("read returned %d files, want 1", len(readOut.Files))
+	}
+	// files[0].content is the file itself, with no numbering and no footer, which
+	// is exactly what edit expects to be handed back.
+	lines := strings.Split(strings.TrimRight(readOut.Files[0].Content, "\n"), "\n")
 	if len(lines) < 6 {
 		t.Fatalf("unexpected read output:\n%s", readOut.Result)
 	}

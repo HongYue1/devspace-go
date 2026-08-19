@@ -48,6 +48,9 @@ type WorkspaceContext struct {
 	Workspace            *Workspace        `json:"workspace"`
 	AgentsFiles          []AgentsFile      `json:"agentsFiles"`
 	AvailableAgentsFiles []AgentsFileEntry `json:"availableAgentsFiles"`
+	// Git is the repository state at the moment the workspace was opened, so a
+	// caller knows about uncommitted work before it starts editing over it.
+	Git GitState `json:"git"`
 }
 
 // AgentsFile represents a loaded AGENTS.md/CLAUDE.md file.
@@ -143,6 +146,7 @@ func (r *Registry) openCheckoutWorkspace(rootPath string) (*WorkspaceContext, er
 		Workspace:            ws,
 		AgentsFiles:          agentsFiles,
 		AvailableAgentsFiles: availableAgentsFiles,
+		Git:                  DescribeGitState(root),
 	}, nil
 }
 
@@ -243,7 +247,9 @@ func (r *Registry) recoverWorkspace(id, reason string) (*Workspace, error) {
 	wsCtx, err := r.OpenDefaultWorkspace()
 	if err != nil {
 		return nil, fmt.Errorf(
-			"workspaceId %s is unusable because %s, and no replacement workspace could be opened: %w",
+			"workspaceId %s is unusable because %s, and no replacement workspace could be opened: %w. "+
+				"Retry with workspaceId 'default' or 'latest', which always select the most recent or default workspace, "+
+				"or call list_roots and then open_workspace to start a fresh one",
 			id, reason, err)
 	}
 	return noticeOfRecovery(wsCtx.Workspace, id, reason), nil
@@ -285,7 +291,8 @@ func (r *Registry) latestUsableWorkspace(skipID string) *Workspace {
 func noticeOfRecovery(ws *Workspace, id, reason string) *Workspace {
 	recovered := *ws
 	recovered.Notice = fmt.Sprintf(
-		"Note: workspaceId %s could not be used because %s. Reconnected to %s (workspaceId %s); paths are relative to that root.",
+		"Note: workspaceId %s could not be used because %s. Reconnected to %s (workspaceId %s); paths are relative to that root. "+
+			"Use that workspaceId from here on, or pass 'default' or 'latest' to always get the most recent workspace.",
 		id, reason, recovered.Root, recovered.ID)
 	return &recovered
 }
@@ -314,7 +321,10 @@ func (r *Registry) ResolvePath(ws *Workspace, inputPath string) (string, error) 
 	}
 
 	if !IsPathInsideRoot(absPath, ws.Root) {
-		return "", fmt.Errorf("path is outside workspace root: %s", inputPath)
+		return "", fmt.Errorf(
+			"path is outside workspace root: %s resolves to %s, which is not under %s. "+
+				"Paths are relative to the workspace root; to reach another folder, open a workspace on it",
+			inputPath, absPath, ws.Root)
 	}
 
 	return absPath, nil
