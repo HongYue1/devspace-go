@@ -13,7 +13,7 @@ This fork begins at upstream [cf8b26a](https://github.com/snakex21/devspace-go/c
 | | Upstream at cf8b26a | This fork |
 |---|---|---|
 | **MCP tools** | 11 | 18 |
-| **Tests** | 3 test files | 38 test files, 295 test functions |
+| **Tests** | 3 test files | 38 test files, 301 test functions |
 | **CI** | None | gofmt, `go vet`, and tests on Linux, Windows, and macOS; four targets cross-compiled; release assets published from `v*` tags |
 | **Authentication** | None | Bearer token required on every route except `/healthz`, with CLI commands to print and rotate it |
 | **Tunnels** | Cloudflare quick tunnel, when `cloudflared` happened to be present | ngrok reserved domains, named Cloudflare tunnels created by one command, Pinggy, or off |
@@ -21,7 +21,7 @@ This fork begins at upstream [cf8b26a](https://github.com/snakex21/devspace-go/c
 | **Language** | 51 locale files; an unrecognised system language fell back to Polish | English only |
 | **Binaries** | Server plus a separate GUI | Server only |
 
-The seven tools added here are `remove`, `list_roots`, `job_status`, `job_kill`, `job_list`, `recent_changes`, and `server_status`. Beyond those, `bash` gained a background mode, `grep` gained `caseInsensitive`, `contextLines`, and `maxMatches`, `write` preserves a file's existing line endings instead of normalising them, and the build version is stamped into the binary and reported in the MCP handshake.
+The seven tools added here are `remove`, `list_roots`, `job_status`, `job_kill`, `job_list`, `recent_changes`, and `server_status`. Beyond those, `bash` gained a background mode, `grep` gained `caseInsensitive`, `contextLines`, and `maxMatches`, `write` preserves a file's existing line endings instead of normalising them, and the build version is stamped into the binary and reported in the MCP handshake, with an unstamped build naming the commit it came from.
 
 The most recent round of work came from a different kind of source. A long agent session was asked what had gone wrong while using this server, and the answers were implemented; they are collected under [Working with an agent's memory](#working-with-an-agents-memory). They share a theme worth stating once: an agent cannot see the file system, so a tool result is the only evidence it has, and a result that is silent about its own limits invites a confident wrong conclusion. A truncated read looks like a whole file, an empty search looks like proof of absence, a failed batch edit looks like a half-written file, and uncommitted work left by someone else looks like work the agent itself forgot.
 
