@@ -1,0 +1,46 @@
+# Line endings are decided here rather than by each contributor's core.autocrlf.
+#
+# Every blob in this repository is already stored with LF. What was missing was
+# a rule for the checkout, so a Windows clone with core.autocrlf=true wrote most
+# sources to disk as CRLF. That made `gofmt -l .` name about forty files as
+# unformatted on Windows while the very same commit passed the Linux CI gate,
+# and it made git warn about replacing LF with CRLF on almost every `git add`.
+# The content was never the problem; the line endings on disk were. Pinning
+# eol=lf makes the local check and the CI check agree.
+#
+# LF-only files suit everything this project uses: the Go toolchain, Git Bash,
+# PowerShell, and the server's own file tools, which preserve whatever line
+# ending a file already has whenever they edit it.
+
+* text=auto eol=lf
+
+# Spelled out for the types actually present, so the intent survives any later
+# change to the catch-all above. Last matching rule wins.
+*.go           text eol=lf
+*.mod          text eol=lf
+*.sum          text eol=lf
+*.md           text eol=lf
+*.yml          text eol=lf
+*.yaml         text eol=lf
+*.json         text eol=lf
+*.js           text eol=lf
+*.sh           text eol=lf
+*.ps1          text eol=lf
+Makefile       text eol=lf
+.gitignore     text eol=lf
+.gitattributes text eol=lf
+
+# Never rewrite bytes that are not text. Nothing binary is tracked today, and
+# tools/ (where the tunnel providers are downloaded at runtime) is ignored, but
+# a stray commit of an executable or an archive should survive untouched.
+*.exe   binary
+*.dll   binary
+*.so    binary
+*.dylib binary
+*.zip   binary
+*.gz    binary
+*.tar   binary
+*.png   binary
+*.jpg   binary
+*.ico   binary
+*.pdf   binary
