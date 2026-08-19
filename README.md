@@ -344,6 +344,18 @@ make -f scripts/unix/Makefile
 
 Builds are pure Go with `CGO_ENABLED=0`, so any platform can cross-compile for any other.
 
+### Which build am I running?
+
+`mcp-webcoder version` and the MCP handshake report the release that was stamped in at link time, which is what the tagged release archives carry. To stamp a local build the same way:
+
+```bash
+go build -ldflags "-X github.com/snakex21/devspace-go/internal/version.Version=$(git describe --tags --always --dirty)" -o mcp-webcoder ./cmd/devspace/
+```
+
+A build without that flag does not report a bare `dev`. Go records the commit in any binary built from a checkout, so an unstamped build says `dev (0b2bd2a)`, or `dev (0b2bd2a, modified)` when the tree still held uncommitted changes. That is usually enough to tell two local builds apart.
+
+Fetching tags cannot change what an existing binary reports. The version is fixed when the binary is linked; nothing reads git at startup. If `version` says less than you expect, you are running an older file than you think.
+
 ---
 
 ## Platform support
